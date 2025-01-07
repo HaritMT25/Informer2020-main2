@@ -17,6 +17,7 @@ import time
 
 import warnings
 warnings.filterwarnings('ignore')
+train_temp=[]
 
 class Exp_Informer(Exp_Basic):
     def __init__(self, args):
@@ -157,8 +158,10 @@ class Exp_Informer(Exp_Basic):
                 loss = criterion(pred, true)
                 train_loss.append(loss.item())
                 
+                
                 if (i+1) % 100==0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                    train_temp.append(loss.item())
                     speed = (time.time()-time_now)/iter_count
                     left_time = speed*((self.args.train_epochs - epoch)*train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
@@ -191,6 +194,7 @@ class Exp_Informer(Exp_Basic):
             
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
+        print(train_temp)
         
         return self.model
 
