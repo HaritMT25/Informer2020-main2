@@ -174,6 +174,7 @@ class Exp_Informer(Exp_Basic):
                     model_optim.step()
 
             print("Epoch: {} cost time: {}".format(epoch+1, time.time()-epoch_time))
+            vanilla_training_loss=train_loss
             train_loss = np.average(train_loss)
             vali_loss = self.vali(vali_data, vali_loader, criterion)
             test_loss = self.vali(test_data, test_loader, criterion)
@@ -186,6 +187,7 @@ class Exp_Informer(Exp_Basic):
                 break
 
             adjust_learning_rate(model_optim, epoch+1, self.args)
+            print(vanilla_training_loss+"this is vanilla")
             
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
