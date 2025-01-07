@@ -194,7 +194,7 @@ class Exp_Informer(Exp_Basic):
             
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
-        print(" Something')
+        print(" Something")
         print(train_temp)
         
         return self.model
