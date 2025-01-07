@@ -189,7 +189,13 @@ class Exp_Informer(Exp_Basic):
             
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
-        
+        best_model_path = path + '/' + 'checkpoint.pth'
+        if os.path.exists(best_model_path):
+            self.model.load_state_dict(torch.load(best_model_path))
+            print("Checkpoint loaded successfully!")
+        else:
+            print("Checkpoint file not found. Using a randomly initialized model.")
+
         return self.model
 
     def test(self, setting):
