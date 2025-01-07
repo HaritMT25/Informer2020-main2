@@ -149,6 +149,7 @@ class Exp_Informer(Exp_Basic):
             
             self.model.train()
             epoch_time = time.time()
+            print('Entering loop')
             for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(train_loader):
                 iter_count += 1
                 
