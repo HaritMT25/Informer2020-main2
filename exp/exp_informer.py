@@ -157,11 +157,10 @@ class Exp_Informer(Exp_Basic):
                     train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
                 loss = criterion(pred, true)
                 train_loss.append(loss.item())
-                
+                print(" Debug train loss:", train_loss)
                 
                 if (i+1) % 100==0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
-                    train_temp.append(loss.item())
                     speed = (time.time()-time_now)/iter_count
                     left_time = speed*((self.args.train_epochs - epoch)*train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
