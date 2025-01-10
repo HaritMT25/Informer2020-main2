@@ -42,7 +42,7 @@ class Dataset_ETT_hour(Dataset):
 
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in
+        self.enc_in = args.enc_in if args else 7 
         self.__read_data__()
 
 
@@ -137,7 +137,7 @@ class Dataset_ETT_minute(Dataset):
 
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in
+        self.enc_in = args.enc_in if args else 7 
         self.__read_data__()
 
 
@@ -228,7 +228,7 @@ class Dataset_Custom(Dataset):
         self.cols=cols
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in
+        self.enc_in = args.enc_in if args else 7 
         self.__read_data__()
 
 
@@ -328,7 +328,7 @@ class Dataset_Pred(Dataset):
         self.cols=cols
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in
+        self.enc_in = args.enc_in if args else 7 
         self.__read_data__()
 
 
