@@ -42,7 +42,7 @@ class Dataset_ETT_hour(Dataset):
 
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in if args else 7 
+        
         self.__read_data__()
 
 
@@ -80,7 +80,7 @@ class Dataset_ETT_hour(Dataset):
 
         self.data_x = data[border1:border2]
 
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, self.enc_in)
+        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
@@ -137,7 +137,7 @@ class Dataset_ETT_minute(Dataset):
 
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in if args else 7 
+        
         self.__read_data__()
 
 
@@ -170,11 +170,11 @@ class Dataset_ETT_minute(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, self.enc_in)
+        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
-            self.data_y = data[border1:border2]
+            self.data_y = data[border1:borenc_inder2]
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
@@ -228,7 +228,7 @@ class Dataset_Custom(Dataset):
         self.cols=cols
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in if args else 7 
+       
         self.__read_data__()
 
 
@@ -273,7 +273,7 @@ class Dataset_Custom(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, self.enc_in)
+        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
@@ -328,7 +328,7 @@ class Dataset_Pred(Dataset):
         self.cols=cols
         self.root_path = root_path
         self.data_path = data_path
-        self.enc_in = args.enc_in if args else 7 
+
         self.__read_data__()
 
 
@@ -370,7 +370,7 @@ class Dataset_Pred(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq[-1:])
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, self.enc_in)
+        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
