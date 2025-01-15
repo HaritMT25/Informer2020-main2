@@ -93,6 +93,7 @@ class TimeFeatureEmbedding(nn.Module):
     def forward(self, x):
         return self.embed(x)
 
+
 class DataEmbedding(nn.Module):
     def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
         super(DataEmbedding, self).__init__()
@@ -120,6 +121,11 @@ class DataEmbedding(nn.Module):
         x_temp = x_temp[:, :x_val.shape[1], :]
 
         # Combine the embeddings
+        # Ensure all tensors have the same shape before adding
+        # print(f"x_val shape: {x_val.shape}")
+        # print(f"x_pos shape: {x_pos.shape}")
+        # print(f"x_temp shape: {x_temp.shape}")
+
         x = x_val + x_pos + x_temp
 
         return self.dropout(x)
