@@ -100,7 +100,7 @@ class DataEmbedding(nn.Module):
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
+        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, freq=freq)
 
         self.dropout = nn.Dropout(p=dropout)
 
@@ -110,9 +110,14 @@ class DataEmbedding(nn.Module):
         x_mark = x_mark[:, :x.shape[1], :]  # Adjust x_mark sequence length if needed
 
         # Apply embeddings
-        x_val = self.value_embedding(x)
-        x_pos = self.position_embedding(x)
-        x_temp = self.temporal_embedding(x_mark)
+        x_val = self.value_embedding(x)  # Value embedding
+        x_pos = self.position_embedding(x)  # Positional embedding
+        x_temp = self.temporal_embedding(x_mark)  # Temporal embedding
+
+        # Debug shapes
+        print(f"x_val shape: {x_val.shape}")
+        print(f"x_pos shape: {x_pos.shape}")
+        print(f"x_temp shape: {x_temp.shape}")
 
         # Pad or truncate positional embedding to match sequence length of value embedding
         if x_pos.shape[1] > x_val.shape[1]:
@@ -133,6 +138,12 @@ class DataEmbedding(nn.Module):
                 device=x_temp.device
             )
             x_temp = torch.cat([x_temp, padding], dim=1)
+
+        # Debug final shapes
+        print(f"After padding/truncation:")
+        print(f"x_val shape: {x_val.shape}")
+        print(f"x_pos shape: {x_pos.shape}")
+        print(f"x_temp shape: {x_temp.shape}")
 
         # Combine the embeddings
         x = x_val + x_pos + x_temp
