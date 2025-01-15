@@ -126,6 +126,12 @@ class DataEmbedding(nn.Module):
         # print(f"x_pos shape: {x_pos.shape}")
         # print(f"x_temp shape: {x_temp.shape}")
 
+        min_batch_size = min(x_val.shape[0], x_pos.shape[0], x_temp.shape[0])
+        x_val = x_val[:min_batch_size]
+        x_pos = x_pos[:min_batch_size]
+        x_temp = x_temp[:min_batch_size]
+
+
         x = x_val + x_pos + x_temp
 
         return self.dropout(x)
