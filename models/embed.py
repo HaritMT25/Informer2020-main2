@@ -107,7 +107,7 @@ class DataEmbedding(nn.Module):
     def forward(self, x, x_mark):
         # Ensure x and x_mark have the same sequence length
         x = x.type(torch.float32)  # Convert to float32
-       # x_mark = x_mark[:, :x.shape[1], :] # Adjust x_mark sequence length if needed
+        x_mark = x_mark[:, :x.shape[1], :] # Adjust x_mark sequence length if needed
 
         # Apply embeddings
         x_val = self.value_embedding(x)
@@ -119,7 +119,8 @@ class DataEmbedding(nn.Module):
 
         # Adjust the sequence length of temporal embedding (x_temp) to match the sequence length of value embedding (x_val)
         x_temp = x_temp[:, :x_val.shape[1], :]
-
+        x_pos = x_pos.reshape(x_val.shape)  # Reshape to match x_val shape
+        x_temp = x_temp.reshape(x_val.shape) # Reshape to match x_val shape
         # Combine the embeddings
         # Ensure all tensors have the same shape before adding
         # print(f"x_val shape: {x_val.shape}")
