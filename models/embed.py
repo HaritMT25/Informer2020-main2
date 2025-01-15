@@ -131,6 +131,7 @@ class DataEmbedding(nn.Module):
 
        
 
-        x = x_val + x_pos + x_temp
+        x = x_val + x_pos.expand(x_val.shape) + x_temp.expand(x_val.shape)
+
 
         return self.dropout(x)
