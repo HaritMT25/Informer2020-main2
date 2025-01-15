@@ -119,15 +119,20 @@ class DataEmbedding(nn.Module):
         print(f"x_pos shape: {x_pos.shape}")
         print(f"x_temp shape: {x_temp.shape}")
 
-        # Truncate positional embedding to match sequence length of value embedding
+        #!/usr/bin/python
+# -*- coding: utf-8 -*-
         if x_pos.shape[1] > x_val.shape[1]:
-            x_pos = x_pos[:, :x_val.shape[1], :]
+            x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate
         elif x_pos.shape[1] < x_val.shape[1]:
-            padding = torch.zeros(
-                (x_pos.shape[0], x_val.shape[1] - x_pos.shape[1], x_pos.shape[2]), 
-                device=x_pos.device
-            )
-            x_pos = torch.cat([x_pos, padding], dim=1)
+        
+            # Pad with zeros if necessary
+        
+            padding = torch.zeros((x_pos.shape[0], x_val.shape[1]
+                                  - x_pos.shape[1], x_pos.shape[2]),
+                                  device=x_pos.device)
+            x_pos = torch.cat([x_pos, padding], dim=1)  # Concatenate padding to match sequence length
+
+
 
         # Truncate temporal embedding to match sequence length of value embedding
         if x_temp.shape[1] > x_val.shape[1]:
