@@ -114,20 +114,27 @@ class DataEmbedding(nn.Module):
         x_pos = self.position_embedding(x)
         x_temp = self.temporal_embedding(x_mark)
 
-        # Truncate positional embedding to match sequence length of value embedding
+        # Pad or truncate positional embedding to match sequence length of value embedding
         if x_pos.shape[1] > x_val.shape[1]:
             x_pos = x_pos[:, :x_val.shape[1], :]
         elif x_pos.shape[1] < x_val.shape[1]:
-            raise RuntimeError(f"x_pos sequence length ({x_pos.shape[1]}) is shorter than x_val sequence length ({x_val.shape[1]}).")
+            padding = torch.zeros(
+                (x_pos.shape[0], x_val.shape[1] - x_pos.shape[1], x_pos.shape[2]), 
+                device=x_pos.device
+            )
+            x_pos = torch.cat([x_pos, padding], dim=1)
 
-        # Truncate temporal embedding to match sequence length of value embedding
+        # Pad or truncate temporal embedding to match sequence length of value embedding
         if x_temp.shape[1] > x_val.shape[1]:
             x_temp = x_temp[:, :x_val.shape[1], :]
         elif x_temp.shape[1] < x_val.shape[1]:
-            raise RuntimeError(f"x_temp sequence length ({x_temp.shape[1]}) is shorter than x_val sequence length ({x_val.shape[1]}).")
+            padding = torch.zeros(
+                (x_temp.shape[0], x_val.shape[1] - x_temp.shape[1], x_temp.shape[2]), 
+                device=x_temp.device
+            )
+            x_temp = torch.cat([x_temp, padding], dim=1)
 
-        # Ensure all tensors have compatible shapes
+        # Combine the embeddings
         x = x_val + x_pos + x_temp
 
         return self.dropout(x)
-
