@@ -100,43 +100,34 @@ class DataEmbedding(nn.Module):
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type!='timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
+        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
 
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
         # Ensure x and x_mark have the same sequence length
         x = x.type(torch.float32)  # Convert to float32
-        x_mark = x_mark[:, :x.shape[1], :] # Adjust x_mark sequence length if needed
+        x_mark = x_mark[:, :x.shape[1], :]  # Adjust x_mark sequence length if needed
 
         # Apply embeddings
         x_val = self.value_embedding(x)
         x_pos = self.position_embedding(x)
         x_temp = self.temporal_embedding(x_mark)
 
-        # Adjust the sequence length of positional embedding (x_pos) to match the sequence length of value embedding (x_val)
-        x_pos = x_pos[:, :x_val.shape[1], :]
+        # Truncate positional embedding to match sequence length of value embedding
+        if x_pos.shape[1] > x_val.shape[1]:
+            x_pos = x_pos[:, :x_val.shape[1], :]
+        elif x_pos.shape[1] < x_val.shape[1]:
+            raise RuntimeError(f"x_pos sequence length ({x_pos.shape[1]}) is shorter than x_val sequence length ({x_val.shape[1]}).")
 
-        # Adjust the sequence length of temporal embedding (x_temp) to match the sequence length of value embedding (x_val)
-        x_temp = x_temp[:, :x_val.shape[1], :]
-        x_pos = x_pos.reshape(x_val.shape)  # Reshape to match x_val shape
-        x_temp = x_temp.reshape(x_val.shape) # Reshape to match x_val shape
-        # Combine the embeddings
-        # Ensure all tensors have the same shape before adding
-        # print(f"x_val shape: {x_val.shape}")
-        # print(f"x_pos shape: {x_pos.shape}")
-        # print(f"x_temp shape: {x_temp.shape}")
+        # Truncate temporal embedding to match sequence length of value embedding
+        if x_temp.shape[1] > x_val.shape[1]:
+            x_temp = x_temp[:, :x_val.shape[1], :]
+        elif x_temp.shape[1] < x_val.shape[1]:
+            raise RuntimeError(f"x_temp sequence length ({x_temp.shape[1]}) is shorter than x_val sequence length ({x_val.shape[1]}).")
 
-        x_temp = self.temporal_projection(x_temp) # Project to d_model dimension
-
-        x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate to match sequence length
-        x_pos = x_pos.expand_as(x_val)        # Expand to match the full shape
-
-
-
-       
-
-        x = x_val + x_pos.expand(x_val.shape) + x_temp.expand(x_val.shape)
-
+        # Ensure all tensors have compatible shapes
+        x = x_val + x_pos + x_temp
 
         return self.dropout(x)
+
