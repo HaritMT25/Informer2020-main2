@@ -129,6 +129,10 @@ class DataEmbedding(nn.Module):
 
         x_temp = self.temporal_projection(x_temp) # Project to d_model dimension
 
+        x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate to match sequence length
+        x_pos = x_pos.expand_as(x_val)        # Expand to match the full shape
+
+
 
        
 
