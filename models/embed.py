@@ -112,14 +112,16 @@ class DataEmbedding(nn.Module):
         # Temporal embedding
         x_temp = self.temporal_embedding(x_mark)
 
-        # Align batch sizes
-        if x_pos.shape[0] != x_val.shape[0]:
-            x_pos = x_pos.expand(x_val.shape[0], -1, -1)
+        # Ensure batch size alignment
+        max_batch_size = max(x_val.shape[0], x_pos.shape[0], x_temp.shape[0])
+        if x_val.shape[0] != max_batch_size:
+            x_val = x_val.expand(max_batch_size, -1, -1)
+        if x_pos.shape[0] != max_batch_size:
+            x_pos = x_pos.expand(max_batch_size, -1, -1)
+        if x_temp.shape[0] != max_batch_size:
+            x_temp = x_temp.expand(max_batch_size, -1, -1)
 
-        if x_temp.shape[0] != x_val.shape[0]:
-            x_temp = x_temp.expand(x_val.shape[0], -1, -1)
-
-        # Align sequence lengths
+        # Ensure sequence length alignment
         seq_len = x_val.shape[1]
         x_pos = self._adjust_sequence_length(x_pos, seq_len)
         x_temp = self._adjust_sequence_length(x_temp, seq_len)
