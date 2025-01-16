@@ -105,63 +105,31 @@ class DataEmbedding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
-        # Ensure x and x_mark have the same sequence length
-        x = x.type(torch.float32)  # Convert to float32
-        x_mark = x_mark[:, :x.shape[1], :]  # Adjust x_mark sequence length if needed
+        # Ensure input tensor x is float32
+        x = x.type(torch.float32)
+
+        # Adjust x_mark's sequence length to match x
+        x_mark = x_mark[:, :x.shape[1], :]
 
         # Apply embeddings
         x_val = self.value_embedding(x)  # Value embedding
         x_pos = self.position_embedding(x)  # Positional embedding
         x_temp = self.temporal_embedding(x_mark)  # Temporal embedding
 
-        # Debug shapes
-        print(f"x_val shape: {x_val.shape}")
-        print(f"x_pos shape: {x_pos.shape}")
-        print(f"x_temp shape: {x_temp.shape}")
-
-        #!/usr/bin/python
-# -*- coding: utf-8 -*-
+        # Ensure sequence lengths match
         if x_pos.shape[1] > x_val.shape[1]:
-            x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate
+            x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate positional embedding
         elif x_pos.shape[1] < x_val.shape[1]:
-        
-            # Pad with zeros if necessary
-        
-            padding = torch.zeros((x_pos.shape[0], x_val.shape[1]
-                                  - x_pos.shape[1], x_pos.shape[2]),
-                                  device=x_pos.device)
-            x_pos = torch.cat([x_pos, padding], dim=1)  # Concatenate padding to match sequence length
+            padding = torch.zeros((x_pos.shape[0], x_val.shape[1] - x_pos.shape[1], x_pos.shape[2]), device=x_pos.device)
+            x_pos = torch.cat([x_pos, padding], dim=1)  # Pad positional embedding
 
-
-
-        # Truncate temporal embedding to match sequence length of value embedding
         if x_temp.shape[1] > x_val.shape[1]:
-            # Discard the extra points from the end (truncate)
-            x_temp = x_temp[:, :x_val.shape[1], :]
+            x_temp = x_temp[:, :x_val.shape[1], :]  # Truncate temporal embedding
         elif x_temp.shape[1] < x_val.shape[1]:
-            padding = torch.zeros(
-                (x_temp.shape[0], x_val.shape[1] - x_temp.shape[1], x_temp.shape[2]), 
-                device=x_temp.device
-            )
-            x_temp = torch.cat([x_temp, padding], dim=1)
+            padding = torch.zeros((x_temp.shape[0], x_val.shape[1] - x_temp.shape[1], x_temp.shape[2]), device=x_temp.device)
+            x_temp = torch.cat([x_temp, padding], dim=1)  # Pad temporal embedding
 
-
-          # Debug final shapes
-        print(f"After truncation/padding:")
-        print(f"x_val shape: {x_val.shape}")
-        print(f"x_pos shape: {x_pos.shape}")
-        print(f"x_temp shape: {x_temp.shape}")
-
-
-
-        x_pos = x_pos.repeat(x_val.shape[0], 1, 1)
-
-        # Slice x_temp to match size of x_val along dimension 0
-        x_temp = x_temp[:x_val.shape[0], :, :]
-
-
-        # Debug final shapes
-        print(f"After truncation/padding:")
+        # Debugging shapes (optional, remove in production)
         print(f"x_val shape: {x_val.shape}")
         print(f"x_pos shape: {x_pos.shape}")
         print(f"x_temp shape: {x_temp.shape}")
