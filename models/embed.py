@@ -116,6 +116,14 @@ class DataEmbedding(nn.Module):
         x_pos = self.position_embedding(x)  # Positional embedding
         x_temp = self.temporal_embedding(x_mark)  # Temporal embedding
 
+        # Adjust batch size of x_pos to match x_val
+        if x_pos.shape[0] != x_val.shape[0]:
+            x_pos = x_pos.expand(x_val.shape[0], -1, -1)
+
+        # Adjust batch size of x_temp to match x_val
+        if x_temp.shape[0] != x_val.shape[0]:
+            x_temp = x_temp.expand(x_val.shape[0], -1, -1)
+
         # Ensure sequence lengths match
         if x_pos.shape[1] > x_val.shape[1]:
             x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate positional embedding
@@ -128,11 +136,6 @@ class DataEmbedding(nn.Module):
         elif x_temp.shape[1] < x_val.shape[1]:
             padding = torch.zeros((x_temp.shape[0], x_val.shape[1] - x_temp.shape[1], x_temp.shape[2]), device=x_temp.device)
             x_temp = torch.cat([x_temp, padding], dim=1)  # Pad temporal embedding
-
-        # Debugging shapes (optional, remove in production)
-        print(f"x_val shape: {x_val.shape}")
-        print(f"x_pos shape: {x_pos.shape}")
-        print(f"x_temp shape: {x_temp.shape}")
 
         # Combine the embeddings
         x = x_val + x_pos + x_temp
