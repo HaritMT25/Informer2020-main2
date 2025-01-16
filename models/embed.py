@@ -93,7 +93,6 @@ class TimeFeatureEmbedding(nn.Module):
     def forward(self, x):
         return self.embed(x)
 
-
 class DataEmbedding(nn.Module):
     def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
         super(DataEmbedding, self).__init__()
@@ -103,17 +102,24 @@ class DataEmbedding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
+
+
+        print(f"x shape: {x.shape}")        # Shape of input tensor x
+        print(f"x_mark shape: {x_mark.shape}")  # Shape of time-related tensor x_mark
+ 
         # Value embedding
         x_val = self.value_embedding(x)
-
-        # Positional embedding
         x_pos = self.position_embedding(x)
-
-        # Temporal embedding
         x_temp = self.temporal_embedding(x_mark)
 
-        # Ensure batch size alignment
+        # Debug Shapes
+        print(f"x_val shape (value embedding): {x_val.shape}")
+        print(f"x_pos shape (positional embedding): {x_pos.shape}")
+        print(f"x_temp shape (temporal embedding): {x_temp.shape}")
+
+        # Ensure batch size consistency
         max_batch_size = max(x_val.shape[0], x_pos.shape[0], x_temp.shape[0])
+
         if x_val.shape[0] != max_batch_size:
             x_val = x_val.expand(max_batch_size, -1, -1)
         if x_pos.shape[0] != max_batch_size:
@@ -121,10 +127,15 @@ class DataEmbedding(nn.Module):
         if x_temp.shape[0] != max_batch_size:
             x_temp = x_temp.expand(max_batch_size, -1, -1)
 
-        # Ensure sequence length alignment
-        seq_len = x_val.shape[1]
-        x_pos = self._adjust_sequence_length(x_pos, seq_len)
-        x_temp = self._adjust_sequence_length(x_temp, seq_len)
+        # Ensure sequence length consistency
+        target_seq_len = x_val.shape[1]
+        x_pos = self._adjust_sequence_length(x_pos, target_seq_len)
+        x_temp = self._adjust_sequence_length(x_temp, target_seq_len)
+
+        # Debug Shapes After Alignment
+        print(f"x_val shape (after alignment): {x_val.shape}")
+        print(f"x_pos shape (after alignment): {x_pos.shape}")
+        print(f"x_temp shape (after alignment): {x_temp.shape}")
 
         # Combine embeddings
         x = x_val + x_pos + x_temp
@@ -136,8 +147,9 @@ class DataEmbedding(nn.Module):
         Adjusts the sequence length of a tensor to match the target length by truncating or padding.
         """
         if tensor.shape[1] > target_seq_len:
-            tensor = tensor[:, :target_seq_len, :]  # Truncate
+            return tensor[:, :target_seq_len, :]  # Truncate
         elif tensor.shape[1] < target_seq_len:
             padding = torch.zeros((tensor.shape[0], target_seq_len - tensor.shape[1], tensor.shape[2]), device=tensor.device)
-            tensor = torch.cat([tensor, padding], dim=1)  # Pad
+            return torch.cat([tensor, padding], dim=1)  # Pad
         return tensor
+
