@@ -145,6 +145,21 @@ class DataEmbedding(nn.Module):
             )
             x_temp = torch.cat([x_temp, padding], dim=1)
 
+
+          # Debug final shapes
+        print(f"After truncation/padding:")
+        print(f"x_val shape: {x_val.shape}")
+        print(f"x_pos shape: {x_pos.shape}")
+        print(f"x_temp shape: {x_temp.shape}")
+
+
+
+        x_pos = x_pos.repeat(x_val.shape[0], 1, 1)
+
+        # Slice x_temp to match size of x_val along dimension 0
+        x_temp = x_temp[:x_val.shape[0], :, :]
+
+
         # Debug final shapes
         print(f"After truncation/padding:")
         print(f"x_val shape: {x_val.shape}")
