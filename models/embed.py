@@ -97,47 +97,45 @@ class TimeFeatureEmbedding(nn.Module):
 class DataEmbedding(nn.Module):
     def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
         super(DataEmbedding, self).__init__()
-
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, freq=freq)
-
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
-        # Ensure input tensor x is float32
-        x = x.type(torch.float32)
+        # Value embedding
+        x_val = self.value_embedding(x)
 
-        # Adjust x_mark's sequence length to match x
-        x_mark = x_mark[:, :x.shape[1], :]
+        # Positional embedding
+        x_pos = self.position_embedding(x)
 
-        # Apply embeddings
-        x_val = self.value_embedding(x)  # Value embedding
-        x_pos = self.position_embedding(x)  # Positional embedding
-        x_temp = self.temporal_embedding(x_mark)  # Temporal embedding
+        # Temporal embedding
+        x_temp = self.temporal_embedding(x_mark)
 
-        # Adjust batch size of x_pos to match x_val
+        # Align batch sizes
         if x_pos.shape[0] != x_val.shape[0]:
             x_pos = x_pos.expand(x_val.shape[0], -1, -1)
 
-        # Adjust batch size of x_temp to match x_val
         if x_temp.shape[0] != x_val.shape[0]:
             x_temp = x_temp.expand(x_val.shape[0], -1, -1)
 
-        # Ensure sequence lengths match
-        if x_pos.shape[1] > x_val.shape[1]:
-            x_pos = x_pos[:, :x_val.shape[1], :]  # Truncate positional embedding
-        elif x_pos.shape[1] < x_val.shape[1]:
-            padding = torch.zeros((x_pos.shape[0], x_val.shape[1] - x_pos.shape[1], x_pos.shape[2]), device=x_pos.device)
-            x_pos = torch.cat([x_pos, padding], dim=1)  # Pad positional embedding
+        # Align sequence lengths
+        seq_len = x_val.shape[1]
+        x_pos = self._adjust_sequence_length(x_pos, seq_len)
+        x_temp = self._adjust_sequence_length(x_temp, seq_len)
 
-        if x_temp.shape[1] > x_val.shape[1]:
-            x_temp = x_temp[:, :x_val.shape[1], :]  # Truncate temporal embedding
-        elif x_temp.shape[1] < x_val.shape[1]:
-            padding = torch.zeros((x_temp.shape[0], x_val.shape[1] - x_temp.shape[1], x_temp.shape[2]), device=x_temp.device)
-            x_temp = torch.cat([x_temp, padding], dim=1)  # Pad temporal embedding
-
-        # Combine the embeddings
+        # Combine embeddings
         x = x_val + x_pos + x_temp
-
         return self.dropout(x)
+
+    @staticmethod
+    def _adjust_sequence_length(tensor, target_seq_len):
+        """
+        Adjusts the sequence length of a tensor to match the target length by truncating or padding.
+        """
+        if tensor.shape[1] > target_seq_len:
+            tensor = tensor[:, :target_seq_len, :]  # Truncate
+        elif tensor.shape[1] < target_seq_len:
+            padding = torch.zeros((tensor.shape[0], target_seq_len - tensor.shape[1], tensor.shape[2]), device=tensor.device)
+            tensor = torch.cat([tensor, padding], dim=1)  # Pad
+        return tensor
