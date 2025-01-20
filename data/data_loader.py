@@ -80,7 +80,7 @@ class Dataset_ETT_hour(Dataset):
 
         self.data_x = data[border1:border2]
 
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
+        #self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
@@ -170,7 +170,7 @@ class Dataset_ETT_minute(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
+        #self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
@@ -273,7 +273,7 @@ class Dataset_Custom(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
+        #self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len, 7)
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
@@ -370,7 +370,8 @@ class Dataset_Pred(Dataset):
         data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq[-1:])
 
         self.data_x = data[border1:border2]
-        self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
+        #self.data_x = apply_fft_in_pieces(self.data_x, self.seq_len,7)
+        
         if self.inverse:
             self.data_y = df_data.values[border1:border2]
         else:
