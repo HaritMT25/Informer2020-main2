@@ -24,28 +24,41 @@ class PositionalEmbedding(nn.Module):
         return self.pe[:, :x.size(1)]
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, m=2):
+    def __init__(self, c_in, d_model):
         super(TokenEmbedding, self).__init__()
-        kernel_size = 2 * m + 1  # Window size: 2m points ahead and behind
-        padding = m  # Ensures output length matches input length
-        self.tokenConv = nn.Conv1d(
-            in_channels=c_in, 
-            out_channels=d_model, 
-            kernel_size=kernel_size, 
-            padding=padding, 
-            padding_mode='circular'  # Circular padding for sequence continuity
-        )
-        
-        # Initialize weights
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+        self.c_in = c_in
+        self.d_model = d_model
+        self.num_points = 8  # Number of points to consider (original + 7 others)
+        self.gap = 3  # Gap between points
+
+        # Linear layer to map the aggregated points to d_model dimensions
+        self.linear = nn.Linear(self.num_points * c_in, d_model)
 
     def forward(self, x):
         # Input x: (batch_size, seq_length, c_in)
-        x = self.tokenConv(x.permute(0, 2, 1))  # Shape: (batch_size, c_in, seq_length)
-        x = x.transpose(1, 2)  # Back to (batch_size, seq_length, d_model)
-        return x
+        batch_size, seq_length, c_in = x.shape
+
+        # Prepare indices for the desired points
+        indices = torch.arange(self.num_points).unsqueeze(0) * self.gap  # Shape: (1, num_points)
+        indices = indices + torch.arange(seq_length).unsqueeze(1)  # Shape: (seq_length, num_points)
+        indices = indices % seq_length  # Wrap around using modulo for circular indexing
+
+        # Gather the points based on the indices
+        x_expanded = x.unsqueeze(1).repeat(1, seq_length, 1, 1)  # Shape: (batch_size, seq_length, seq_length, c_in)
+        x_gathered = torch.gather(
+            x_expanded, 
+            dim=2, 
+            index=indices.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, c_in)
+        )  # Shape: (batch_size, seq_length, num_points, c_in)
+
+        # Flatten the gathered points along the num_points and c_in dimensions
+        x_flattened = x_gathered.reshape(batch_size, seq_length, -1)  # Shape: (batch_size, seq_length, num_points * c_in)
+
+        # Pass through a linear layer to get the final embedding
+        x_embedded = self.linear(x_flattened)  # Shape: (batch_size, seq_length, d_model)
+
+        return x_embedded
+
 
 
 class FixedEmbedding(nn.Module):
