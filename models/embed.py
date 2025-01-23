@@ -45,32 +45,7 @@ class TokenEmbedding(nn.Module):
         # Input x: (batch_size, seq_length, c_in)
         x = self.tokenConv(x.permute(0, 2, 1))  # Shape: (batch_size, c_in, seq_length)
         x = x.transpose(1, 2)  # Back to (batch_size, seq_length, d_model)
-        return xdef forward(self, x):
-    # Input x: (batch_size, seq_length, c_in)
-        x = self.tokenConv(x.permute(0, 2, 1))  # Shape: (batch_size, c_in, seq_length)
-        x = x.transpose(1, 2)  # Back to (batch_size, seq_length, d_model)
-
-    # Flatten the channels and sequence into one vector per time point
-        batch_size, seq_len, d_model = x.shape
-        x = x.reshape(batch_size, seq_len, -1)  # Shape: (batch_size, seq_len, c_in * d_model)
-
         return x
-
-class ChannelAwarePositionalEncoding(nn.Module):
-    def __init__(self, c_in, m, d_model):
-        super(ChannelAwarePositionalEncoding, self).__init__()
-        self.d_model = d_model
-        self.channel_positions = nn.Parameter(torch.zeros(c_in * (2 * m + 1), d_model))
-
-        # Initialize with sinusoidal encoding or learnable weights
-        position = torch.arange(0, c_in * (2 * m + 1)).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
-        self.channel_positions[:, 0::2] = torch.sin(position * div_term)
-        self.channel_positions[:, 1::2] = torch.cos(position * div_term)
-
-    def forward(self, x):
-        # Add channel positional encoding
-        return x + self.channel_positions
 
 
 class FixedEmbedding(nn.Module):
@@ -136,12 +111,10 @@ class DataEmbedding(nn.Module):
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type!='timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
-        self.channel_positional_encoding = ChannelAwarePositionalEncoding(c_in=c_in, m=m, d_model=d_model)
+
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
-        x = self.value_embedding(x)  # Shape: (batch_size, seq_len, c_in * d_model)
-        x = self.channel_positional_encoding(x)  # Add channel-aware positional encoding
-        x = x + self.position_embedding(x) + self.temporal_embedding(x_mark)
+        x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
         
         return self.dropout(x)
