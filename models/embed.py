@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import math
 
 class PositionalEmbedding(nn.Module):
@@ -78,27 +77,12 @@ class CircularConv1D(nn.Module):
         return x
 
     def forward(self, x):
-        # Save the original sequence length
         original_seq_len = x.size(1)
-        
-        # Permute for Conv1D compatibility (batch_size, c_in, seq_len)
-        x = x.permute(0, 2, 1)
-        
-        # Apply circular padding
+        x = x.permute(0, 2, 1)  # Shape: (batch_size, c_in, seq_len)
         x = self.circular_pad(x)
-        
-        # Apply convolution
         x = self.conv(x)
-        
-        # Truncate or pad to match the original sequence length
-        if x.size(2) > original_seq_len:
-            x = x[:, :, :original_seq_len]  # Truncate if longer
-        elif x.size(2) < original_seq_len:
-            pad_size = original_seq_len - x.size(2)
-            x = torch.cat([x, torch.zeros(x.size(0), x.size(1), pad_size, device=x.device)], dim=2)  # Pad if shorter
-        
-        # Permute back to (batch_size, seq_len, d_model)
-        return x.permute(0, 2, 1)
+        x = x[:, :, :original_seq_len]  # Truncate to match the original sequence length
+        return x.permute(0, 2, 1)  # Shape: (batch_size, seq_len, d_model)
 
 
 class DataEmbedding(nn.Module):
@@ -107,24 +91,37 @@ class DataEmbedding(nn.Module):
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
-        self.circular_conv = CircularConv1D(c_in=c_in, d_model=d_model)
-        
+        self.temporal_embedding = nn.Linear(c_in, d_model)  # Placeholder for TemporalEmbedding
+        self.circular_conv = CircularConv1D(c_in=d_model, d_model=d_model)
+
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
+        # Debugging shapes
+        print(f"Input x shape: {x.shape}")
+        print(f"Input x_mark shape: {x_mark.shape}")
+
         # Apply token and temporal embeddings
-        x = self.value_embedding(x) + self.temporal_embedding(x_mark)
+        x_value = self.value_embedding(x)  # Shape: (batch_size, seq_len, d_model)
+        print(f"x_value shape after TokenEmbedding: {x_value.shape}")
 
-        # Apply positional encoding before circular convolution
-       
+        x_temporal = self.temporal_embedding(x_mark)  # Shape: (batch_size, seq_len, d_model)
+        print(f"x_temporal shape after TemporalEmbedding: {x_temporal.shape}")
 
-        # Apply CircularConv1D after positional encoding
+        x = x_value + x_temporal
+
+        # Apply CircularConv1D
         x = self.circular_conv(x)  # Shape: (batch_size, seq_len, d_model)
+        print(f"x shape after CircularConv1D: {x.shape}")
 
-        x = x + self.position_embedding(x)  # Apply positional encoding
+        # Add positional embedding
+        x_pos = self.position_embedding(x)  # Shape: (batch_size, seq_len, d_model)
+        print(f"x_pos shape: {x_pos.shape}")
+
+        x = x + x_pos
 
         # Apply dropout
         x = self.dropout(x)
 
+        print(f"Final output shape: {x.shape}")
         return x
