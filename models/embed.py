@@ -58,31 +58,6 @@ class TokenEmbedding(nn.Module):
         return embeddings
 
 
-class CircularConv1D(nn.Module):
-    def __init__(self, c_in, d_model, kernel_size=3):
-        super(CircularConv1D, self).__init__()
-        self.kernel_size = kernel_size
-        self.conv = nn.Conv1d(
-            in_channels=c_in,
-            out_channels=d_model,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=0
-        )
-
-    def circular_pad(self, x):
-        padding_size = self.kernel_size - 1
-        # Add padding to the start and end
-        x = torch.cat([x[:, :, -padding_size:], x, x[:, :, :padding_size]], dim=2)
-        return x
-
-    def forward(self, x):
-        original_seq_len = x.size(1)
-        x = x.permute(0, 2, 1)  # Shape: (batch_size, c_in, seq_len)
-        x = self.circular_pad(x)
-        x = self.conv(x)
-        x = x[:, :, :original_seq_len]  # Truncate to match the original sequence length
-        return x.permute(0, 2, 1)  # Shape: (batch_size, seq_len, d_model)
 
 
 class DataEmbedding(nn.Module):
@@ -92,36 +67,28 @@ class DataEmbedding(nn.Module):
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = nn.Linear(c_in, d_model)  # Placeholder for TemporalEmbedding
-        self.circular_conv = CircularConv1D(c_in=d_model, d_model=d_model)
+
 
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
-        # Debugging shapes
-        print(f"Input x shape: {x.shape}")
-        print(f"Input x_mark shape: {x_mark.shape}")
+
 
         # Apply token and temporal embeddings
         x_value = self.value_embedding(x)  # Shape: (batch_size, seq_len, d_model)
-        print(f"x_value shape after TokenEmbedding: {x_value.shape}")
+
 
         x_temporal = self.temporal_embedding(x_mark)  # Shape: (batch_size, seq_len, d_model)
-        print(f"x_temporal shape after TemporalEmbedding: {x_temporal.shape}")
 
         x = x_value + x_temporal
 
-        # Apply CircularConv1D
-        x = self.circular_conv(x)  # Shape: (batch_size, seq_len, d_model)
-        print(f"x shape after CircularConv1D: {x.shape}")
 
         # Add positional embedding
         x_pos = self.position_embedding(x)  # Shape: (batch_size, seq_len, d_model)
-        print(f"x_pos shape: {x_pos.shape}")
-
+       
         x = x + x_pos
 
         # Apply dropout
         x = self.dropout(x)
 
-        print(f"Final output shape: {x.shape}")
         return x
