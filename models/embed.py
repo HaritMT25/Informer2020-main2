@@ -37,9 +37,12 @@ class TokenEmbedding(nn.Module):
         # Input x: (batch_size, seq_length, c_in)
         batch_size, seq_length, c_in = x.shape
 
+        # Ensure x is on the same device as this module
+        device = x.device
+
         # Prepare indices for the desired points
-        indices = torch.arange(self.num_points).unsqueeze(0) * self.gap  # Shape: (1, num_points)
-        indices = indices + torch.arange(seq_length).unsqueeze(1)  # Shape: (seq_length, num_points)
+        indices = torch.arange(self.num_points, device=device).unsqueeze(0) * self.gap  # Shape: (1, num_points)
+        indices = indices + torch.arange(seq_length, device=device).unsqueeze(1)  # Shape: (seq_length, num_points)
         indices = indices % seq_length  # Wrap around using modulo for circular indexing
 
         # Gather the points based on the indices
