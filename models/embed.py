@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 import math
 
 class PositionalEmbedding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEmbedding, self).__init__()
+        # Compute the positional encodings once in log space.
         pe = torch.zeros(max_len, d_model).float()
         pe.require_grad = False
 
@@ -21,39 +24,42 @@ class PositionalEmbedding(nn.Module):
         return self.pe[:, :x.size(1)]
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, m=7, gap=3):
+    def __init__(self, c_in, d_model):
         super(TokenEmbedding, self).__init__()
         self.c_in = c_in
-        self.m = m
-        self.gap = gap
+        self.d_model = d_model
+        self.num_points = 8  # Number of points to consider (original + 7 others)
+        self.gap = 3  # Gap between points
 
-        self.convs = nn.ModuleList([
-            nn.Conv1d(
-                in_channels=1, 
-                out_channels=m, 
-                kernel_size=(1 + (m - 1) * gap),
-                stride=1, 
-                padding=(gap * (m - 1))
-            ) for _ in range(c_in)
-        ])
-
-        for conv in self.convs:
-            nn.init.kaiming_normal_(conv.weight, mode='fan_in', nonlinearity='leaky_relu')
+        # Linear layer to map the aggregated points to d_model dimensions
+        self.linear = nn.Linear(self.num_points * c_in, d_model)
 
     def forward(self, x):
-        batch_size, seq_length, c_in = x.shape
-        assert c_in == self.c_in, f"Expected {self.c_in} channels, got {c_in}"
+        # Input x: (batch_size, seq_length, c_in)
+ batch_size, seq_length, c_in = x.shape
 
-        outputs = []
-        for i in range(self.c_in):
-            channel_data = x[:, :, i].unsqueeze(1)
-            conv_output = self.convs[i](channel_data)
-            outputs.append(conv_output)
+        # Prepare indices for the desired points
+        indices = torch.arange(self.num_points).unsqueeze(0) * self.gap  # Shape: (1, num_points)
+        indices = indices + torch.arange(seq_length).unsqueeze(1)  # Shape: (seq_length, num_points)
+        indices = indices % seq_length  # Wrap around using modulo for circular indexing
 
-        flattened = torch.cat(outputs, dim=1)
-        flattened = flattened.permute(0, 2, 1)
+        # Gather the points based on the indices
+        x_expanded = x.unsqueeze(1).repeat(1, seq_length, 1, 1)  # Shape: (batch_size, seq_length, seq_length, c_in)
+        x_gathered = torch.gather(
+            x_expanded, 
+            dim=2, 
+            index=indices.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1, c_in)
+        )  # Shape: (batch_size, seq_length, num_points, c_in)
 
-        return flattened
+        # Flatten the gathered points along the num_points and c_in dimensions
+        x_flattened = x_gathered.reshape(batch_size, seq_length, -1)  # Shape: (batch_size, seq_length, num_points * c_in)
+
+        # Pass through a linear layer to get the final embedding
+        x_embedded = self.linear(x_flattened)  # Shape: (batch_size, seq_length, d_model)
+
+        return x_embedded
+
+
 
 class FixedEmbedding(nn.Module):
     def __init__(self, c_in, d_model):
@@ -81,33 +87,33 @@ class TemporalEmbedding(nn.Module):
         minute_size = 4; hour_size = 24
         weekday_size = 7; day_size = 32; month_size = 13
 
-        Embed = FixedEmbedding if embed_type == 'fixed' else nn.Embedding
-        if freq == 't':
+        Embed = FixedEmbedding if embed_type=='fixed' else nn.Embedding
+        if freq=='t':
             self.minute_embed = Embed(minute_size, d_model)
         self.hour_embed = Embed(hour_size, d_model)
         self.weekday_embed = Embed(weekday_size, d_model)
         self.day_embed = Embed(day_size, d_model)
         self.month_embed = Embed(month_size, d_model)
-
+    
     def forward(self, x):
         x = x.long()
-
-        minute_x = self.minute_embed(x[:, :, 4]) if hasattr(self, 'minute_embed') else 0.
-        hour_x = self.hour_embed(x[:, :, 3])
-        weekday_x = self.weekday_embed(x[:, :, 2])
-        day_x = self.day_embed(x[:, :, 1])
-        month_x = self.month_embed(x[:, :, 0])
-
+        
+        minute_x = self.minute_embed(x[:,:,4]) if hasattr(self, 'minute_embed') else 0.
+        hour_x = self.hour_embed(x[:,:,3])
+        weekday_x = self.weekday_embed(x[:,:,2])
+        day_x = self.day_embed(x[:,:,1])
+        month_x = self.month_embed(x[:,:,0])
+        
         return hour_x + weekday_x + day_x + month_x + minute_x
 
 class TimeFeatureEmbedding(nn.Module):
     def __init__(self, d_model, embed_type='timeF', freq='h'):
         super(TimeFeatureEmbedding, self).__init__()
 
-        freq_map = {'h': 4, 't': 5, 's': 6, 'm': 1, 'a': 1, 'w': 2, 'd': 3, 'b': 3}
+        freq_map = {'h':4, 't':5, 's':6, 'm':1, 'a':1, 'w':2, 'd':3, 'b':3}
         d_inp = freq_map[freq]
         self.embed = nn.Linear(d_inp, d_model)
-
+    
     def forward(self, x):
         return self.embed(x)
 
@@ -117,10 +123,11 @@ class DataEmbedding(nn.Module):
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
+        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type!='timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
 
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
         x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
+        
         return self.dropout(x)
