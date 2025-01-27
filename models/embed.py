@@ -127,16 +127,14 @@ class DataEmbedding(nn.Module):
     def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1, use_custom_kernel=True):
         super(DataEmbedding, self).__init__()
 
-        self.use_custom_kernel = use_custom_kernel
+       
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model) if not use_custom_kernel else None
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
 
         self.dropout = nn.Dropout(p=dropout)
         
-        # Initialize CustomKernelEmbedding if needed
-        if use_custom_kernel:
-            self.custom_kernel_embedding = CustomKernelEmbedding(c_in=c_in, m=d_model)  # Use d_model as the output dimension
+       
 
     def forward(self, x, x_mark):
         if self.use_custom_kernel:
