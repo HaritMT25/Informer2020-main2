@@ -30,9 +30,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class CustomEmbedding(nn.Module):
+class TokenEmbedding(nn.Module):
     def __init__(self, c_in=7, n=17420, d_model=512, num_kernels=74, kernel_size=(8, 3)):
-        super(CustomEmbedding, self).__init__()
+        super(TokenEmbedding, self).__init__()
         self.c_in = c_in
         self.n = n
         self.d_model = d_model
