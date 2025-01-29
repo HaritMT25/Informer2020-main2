@@ -12,62 +12,69 @@ import random
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, m=7, tau=3):
         super(TokenEmbedding, self).__init__()
-        self.m = m          # Number of past timesteps to consider
-        self.tau = tau      # Stride between timesteps
-        self.c_in = c_in    # Number of input channels
-        self.kernel_size = m + 1  # Current + m past values
-        
-        # Generate 74 kernels of shape (kernel_size, 3)
+        self.m = m
+        self.tau = tau
+        self.c_in = c_in
+        self.kernel_size = m + 1
         self.num_kernels = 74
-        self.kernels = nn.Parameter(torch.randn(self.num_kernels, self.kernel_size, 3))
-        
-        # Calculate padding needed at the beginning of the sequence
         self.pad_size = m * tau
         self.pad = nn.ConstantPad1d((self.pad_size, 0), 0)
-
+        
+        # Kernels for depthwise convolution
+        self.kernels = nn.Parameter(torch.randn(self.num_kernels, self.kernel_size))
+        
     def forward(self, x):
-        # Input x: (batch_size, seq_len, c_in)
-        batch_size, seq_len, _ = x.size()
+        batch_size, seq_len, _ = x.shape
         
-        # Pad the beginning of the sequence
-        x_padded = self.pad(x.permute(0, 2, 1))  # (batch_size, c_in, seq_len + pad_size)
-        x_padded = x_padded.permute(0, 2, 1)     # (batch_size, seq_len + pad_size, c_in)
+        # 1. Pad the input sequence
+        x_padded = self.pad(x.permute(0, 2, 1))  # [batch, c_in, seq + pad]
         
-        # Create sliding windows with tau stride
-        windows = x_padded.unfold(1, self.kernel_size, self.tau)  # (batch_size, num_windows, c_in, kernel_size)
-        windows = windows.permute(0, 2, 1, 3)  # (batch_size, c_in, num_windows, kernel_size)
+        # 2. Create sliding windows
+        windows = x_padded.unfold(
+            dimension=2,
+            size=self.kernel_size,
+            step=self.tau
+        )  # [batch, c_in, num_windows, kernel_size]
         
-        # Prepare for convolutions (add channel dimension)
-        windows = windows.unsqueeze(2)  # (batch_size, c_in, 1, num_windows, kernel_size)
+        # 3. Prepare for depthwise convolutions
+        windows = windows.permute(0, 2, 1, 3)  # [batch, num_windows, c_in, kernel_size]
+        windows = windows.reshape(-1, self.c_in, self.kernel_size)  # [batch*num_win, c_in, kernel]
         
-        # Apply first 73 kernels to all channels
-        conv_outputs = []
-        for k in range(self.num_kernels - 1):
-            kernel = self.kernels[k].view(1, 1, 1, self.kernel_size, 3)  # (1,1,1,8,3)
-            kernel = kernel.repeat(batch_size, self.c_in, 1, 1, 1)       # (batch, c_in, 1, 8, 3)
+        # 4. Process first 73 kernels
+        main_outputs = []
+        for k in range(self.num_kernels-1):
+            # Create kernel for all channels
+            kernel = self.kernels[k].repeat(self.c_in, 1, 1)  # [c_in, 1, kernel]
             
-            # Perform depthwise convolution
-            output = F.conv3d(windows, kernel, groups=self.c_in*batch_size)
-            conv_outputs.append(output.squeeze(-3))
-        
-        # Apply 74th kernel to random channel
-        rand_ch = random.randint(0, self.c_in-1)
-        selected_ch = windows[:, rand_ch:rand_ch+1]  # (batch_size, 1, 1, num_windows, kernel_size)
-        kernel = self.kernels[-1].view(1, 1, 1, self.kernel_size, 3)
-        output = F.conv3d(selected_ch, kernel.repeat(batch_size, 1, 1, 1, 1), groups=batch_size)
-        conv_outputs.append(output.squeeze(-3).squeeze(1))
-        
-        # Combine outputs
-        combined = torch.cat([o.view(batch_size, -1) for o in conv_outputs], dim=1)
-        
-        # Match sequence length and reshape to d_model
-        final = combined[:, :seq_len*self.num_kernels].view(batch_size, seq_len, -1)
-        
-        # Project to d_model if needed
-        if final.size(-1) != d_model:
-            final = nn.Linear(final.size(-1), d_model)(final)
+            # Depthwise convolution
+            out = F.conv1d(
+                input=windows,
+                weight=kernel,
+                groups=self.c_in
+            )  # [batch*num_win, c_in, 1]
             
-        return final
+            # Reshape and collect
+            out = out.view(batch_size, -1, self.c_in)  # [batch, num_win, c_in]
+            main_outputs.append(out)
+        
+        # 5. Process 74th kernel on random channel
+        rand_ch = torch.randint(0, self.c_in, (1,)).item()
+        selected = windows[:, rand_ch:rand_ch+1, :]  # [batch*num_win, 1, kernel]
+        out = F.conv1d(
+            selected,
+            self.kernels[-1][None, None, :]
+        )  # [batch*num_win, 1, 1]
+        final_feature = out.view(batch_size, -1, 1)  # [batch, num_win, 1]
+        
+        # 6. Combine all features
+        combined = torch.cat(
+            [torch.cat(main_outputs, dim=2), final_feature],
+            dim=2
+        )  # [batch, num_win, 73*7 + 1]
+        
+        # 7. Align dimensions and project
+        return combined.permute(0, 2, 1)[:, :, :seq_len]  # [batch, d_model, seq]
+
 
 class PositionalEmbedding(nn.Module):
     def __init__(self, d_model, max_len=5000):
