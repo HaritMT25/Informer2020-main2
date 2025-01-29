@@ -24,6 +24,10 @@ class PositionalEmbedding(nn.Module):
         return self.pe[:, :x.size(1)]
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in=7, n=17420, d_model=512, num_kernels=74, kernel_size=(8, 3)):
         super(TokenEmbedding, self).__init__()
@@ -37,7 +41,15 @@ class TokenEmbedding(nn.Module):
         self.kernels = nn.Parameter(torch.randn(num_kernels, *kernel_size))
 
     def forward(self, x):
-        # Input x: (batch_size, seq_length, c_in, 8)
+        # Debug: Check the shape of the input tensor
+        print(f"Input shape: {x.shape}")
+
+        # Ensure the input tensor has the correct shape (batch_size, seq_length, c_in, 8)
+        if x.dim() == 3:
+            # If the input tensor has only 3 dimensions, reshape it
+            x = x.unsqueeze(-1).expand(-1, -1, -1, 8)  # Shape: (batch_size, seq_length, c_in, 8)
+
+        # Unpack the shape of the input tensor
         batch_size, seq_length, c_in, _ = x.shape
 
         # Flatten the input data for each timestep
