@@ -52,9 +52,6 @@ class TokenEmbedding(nn.Module):
         # Unpack the shape of the input tensor
         batch_size, seq_length, c_in, _ = x.shape
 
-        # Flatten the input data for each timestep using reshape instead of view
-        x_flat = x.reshape(batch_size, seq_length, -1)  # Shape: (batch_size, seq_length, c_in * 8)
-
         # Initialize a list to store the results of each kernel application
         outputs = []
 
@@ -64,7 +61,7 @@ class TokenEmbedding(nn.Module):
                 kernel = self.kernels[kernel_idx].unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, 8, 3)
                 
                 # Extract the required values for each timestep
-                channel_data = x[:, :, channel, :].unsqueeze(1).unsqueeze(-1)  # Shape: (batch_size, 1, seq_length, 8, 1)
+                channel_data = x[:, :, channel, :].unsqueeze(1)  # Shape: (batch_size, 1, seq_length, 8)
                 
                 # Create the desired input vector for each timestep
                 input_vectors = []
@@ -75,25 +72,25 @@ class TokenEmbedding(nn.Module):
                         # Pad with zeros if there are not enough future values
                         pad_size = self.kernel_size[1] - len(indices)
                         indices += [seq_length - 1] * pad_size
-                    input_vector = channel_data[:, :, indices, :]  # Shape: (batch_size, 1, kernel_size[1], 8, 1)
+                    input_vector = channel_data[:, :, indices, :]  # Shape: (batch_size, 1, kernel_size[1], 8)
                     input_vectors.append(input_vector)
                 
                 # Stack the input vectors along the sequence length dimension
-                input_vectors = torch.cat(input_vectors, dim=2)  # Shape: (batch_size, 1, seq_length, kernel_size[1], 8, 1)
+                input_vectors = torch.cat(input_vectors, dim=2)  # Shape: (batch_size, 1, seq_length, kernel_size[1], 8)
                 
                 # Apply 2D convolution with stride=1 and padding to maintain sequence length
                 conv_output = F.conv2d(
-                    input_vectors.squeeze(-1).squeeze(1),  # Shape: (batch_size, seq_length, kernel_size[1], 8)
+                    input_vectors,  # Shape: (batch_size, 1, seq_length, kernel_size[1] * 8)
                     kernel,  # Shape: (1, 1, 8, 3)
                     stride=1,
                     padding=(self.kernel_size[0] // 2, self.kernel_size[1] // 2)  # Padding to maintain spatial dimensions
-                )  # Shape: (batch_size, seq_length, 1, 1)
-                outputs.append(conv_output.squeeze(-1).squeeze(-1))  # Shape: (batch_size, seq_length)
+                )  # Shape: (batch_size, 1, seq_length, 1)
+                outputs.append(conv_output.squeeze(1).squeeze(-1))  # Shape: (batch_size, seq_length)
 
         # Apply the 74th kernel to a random channel
         random_channel = torch.randint(0, c_in, (1,)).item()
         kernel = self.kernels[-1].unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, 8, 3)
-        channel_data = x[:, :, random_channel, :].unsqueeze(1).unsqueeze(-1)  # Shape: (batch_size, 1, seq_length, 8, 1)
+        channel_data = x[:, :, random_channel, :].unsqueeze(1)  # Shape: (batch_size, 1, seq_length, 8)
         
         # Create the desired input vector for each timestep
         input_vectors = []
@@ -104,20 +101,20 @@ class TokenEmbedding(nn.Module):
                 # Pad with zeros if there are not enough future values
                 pad_size = self.kernel_size[1] - len(indices)
                 indices += [seq_length - 1] * pad_size
-            input_vector = channel_data[:, :, indices, :]  # Shape: (batch_size, 1, kernel_size[1], 8, 1)
+            input_vector = channel_data[:, :, indices, :]  # Shape: (batch_size, 1, kernel_size[1], 8)
             input_vectors.append(input_vector)
         
         # Stack the input vectors along the sequence length dimension
-        input_vectors = torch.cat(input_vectors, dim=2)  # Shape: (batch_size, 1, seq_length, kernel_size[1], 8, 1)
+        input_vectors = torch.cat(input_vectors, dim=2)  # Shape: (batch_size, 1, seq_length, kernel_size[1], 8)
         
         # Apply 2D convolution with stride=1 and padding to maintain sequence length
         conv_output = F.conv2d(
-            input_vectors.squeeze(-1).squeeze(1),  # Shape: (batch_size, seq_length, kernel_size[1], 8)
+            input_vectors,  # Shape: (batch_size, 1, seq_length, kernel_size[1] * 8)
             kernel,  # Shape: (1, 1, 8, 3)
             stride=1,
             padding=(self.kernel_size[0] // 2, self.kernel_size[1] // 2)  # Padding to maintain spatial dimensions
-        )  # Shape: (batch_size, seq_length, 1, 1)
-        outputs.append(conv_output.squeeze(-1).squeeze(-1))  # Shape: (batch_size, seq_length)
+        )  # Shape: (batch_size, 1, seq_length, 1)
+        outputs.append(conv_output.squeeze(1).squeeze(-1))  # Shape: (batch_size, seq_length)
 
         # Concatenate all outputs along the last dimension
         output = torch.stack(outputs, dim=-1)  # Shape: (batch_size, seq_length, 74 * c_in + 1)
