@@ -81,8 +81,8 @@ class TemporalEmbedding(nn.Module):
                 minute_x).permute(0, 2, 1)  # [batch, d_model, seq_len]
 
 class DataEmbedding(nn.Module):
-    def _init_(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
-        super(DataEmbedding, self)._init_()
+    def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
+        super(DataEmbedding, self).__init__()
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
@@ -91,19 +91,20 @@ class DataEmbedding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark):
+        # TokenEmbedding outputs [batch, d_model, seq_len] -> permute to [batch, seq_len, d_model]
+        value_emb = self.value_embedding(x).permute(0, 2, 1)
         
-        value_emb = self.value_embedding(x)
-        
+        # PositionalEmbedding outputs [1, seq_len, d_model]
         pos_emb = self.position_embedding(x)
         
-        # Check if temporal embedding and value embedding have the same size in dim 2
-        # if not, we pad temporal embedding with zeros to match the size of value embedding
-        
-        temp_emb = self.temporal_embedding(x_mark)
+        # TemporalEmbedding outputs [batch, d_model, seq_len] -> permute to [batch, seq_len, d_model]
+        temp_emb = self.temporal_embedding(x_mark).permute(0, 2, 1)
 
+        # Ensure temporal embedding matches sequence length
         if temp_emb.shape[1] != value_emb.shape[1]:
-            # Pad temporal embedding with zeros to match the size of value embedding
             pad_size = value_emb.shape[1] - temp_emb.shape[1]
-            temp_emb = torch.cat([temp_emb, torch.zeros(temp_emb.shape[0], pad_size, temp_emb.shape[2]).to(temp_emb.device)], dim=1)
+            temp_emb = F.pad(temp_emb, (0, 0, 0, pad_size), "constant", 0)
 
-        return self.dropout(value_emb + pos_emb + temp_emb)
+        # Combine embeddings and apply dropout
+        output = self.dropout(value_emb + pos_emb + temp_emb)
+        return output  # Shape: [batch, seq_len, d_model]
