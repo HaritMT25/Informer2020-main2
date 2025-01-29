@@ -81,30 +81,14 @@ class TemporalEmbedding(nn.Module):
                 minute_x).permute(0, 2, 1)  # [batch, d_model, seq_len]
 
 class DataEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, embed_type='fixed', freq='h', dropout=0.1):
+    def __init__(self, **kwargs): # Changed to accept keyword arguments
         super(DataEmbedding, self).__init__()
+        self.value_embedding = TokenEmbedding(kwargs['c_in'], kwargs['d_model'])
+        self.position_embedding = PositionalEmbedding(kwargs['d_model'])
+        self.temporal_embedding = TemporalEmbedding(kwargs['d_model'], kwargs['freq']) if kwargs.get('embed', '') != '' else None
 
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
-        self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq) if embed_type!='timeF' else TimeFeatureEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
-
-        self.dropout = nn.Dropout(p=dropout)
-
-    def forward(self, x, x_mark):
-        # TokenEmbedding outputs [batch, d_model, seq_len] -> permute to [batch, seq_len, d_model]
-        value_emb = self.value_embedding(x).permute(0, 2, 1)
-        
-        # PositionalEmbedding outputs [1, seq_len, d_model]
-        pos_emb = self.position_embedding(x)
-        
-        # TemporalEmbedding outputs [batch, d_model, seq_len] -> permute to [batch, seq_len, d_model]
-        temp_emb = self.temporal_embedding(x_mark).permute(0, 2, 1)
-
-        # Ensure temporal embedding matches sequence length
-        if temp_emb.shape[1] != value_emb.shape[1]:
-            pad_size = value_emb.shape[1] - temp_emb.shape[1]
-            temp_emb = F.pad(temp_emb, (0, 0, 0, pad_size), "constant", 0)
-
-        # Combine embeddings and apply dropout
-        output = self.dropout(value_emb + pos_emb + temp_emb)
-        return output  # Shape: [batch, seq_len, d_model]
+    def forward(self, x):
+        x = self.value_embedding(x) + self.position_embedding(x)
+        if self.temporal_embedding is not None:
+            x = x + self.temporal_embedding(x)
+        return x
