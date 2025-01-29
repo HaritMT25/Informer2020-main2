@@ -52,8 +52,8 @@ class TokenEmbedding(nn.Module):
         # Unpack the shape of the input tensor
         batch_size, seq_length, c_in, _ = x.shape
 
-        # Flatten the input data for each timestep
-        x_flat = x.view(batch_size, seq_length, -1)  # Shape: (batch_size, seq_length, c_in * 8)
+        # Flatten the input data for each timestep using reshape instead of view
+        x_flat = x.reshape(batch_size, seq_length, -1)  # Shape: (batch_size, seq_length, c_in * 8)
 
         # Initialize a list to store the results of each kernel application
         outputs = []
