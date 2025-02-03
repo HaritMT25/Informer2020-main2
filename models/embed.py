@@ -207,35 +207,3 @@ class DataEmbedding(nn.Module):
         x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
         return self.dropout(x)
 
-#############################################
-# 4. Testing the Embedding
-#############################################
-
-if __name__ == "__main__":
-    # Suppose we have 7 input channels and a dataset with 17,420 timesteps.
-    batch_size = 2
-    seq_length = 17420  # number of timesteps in one example
-    c_in = 7
-    d_model = 512     # because 73*7+1 = 512
-
-    # Create dummy input data for the channels.
-    # For example, random data.
-    x = torch.randn(batch_size, seq_length, c_in)
-    
-    # Create dummy temporal markers.
-    # For this example, we assume each timestep has 5 features: (month, day, weekday, hour, minute)
-    # Their ranges are assumed to be: month in [0,12], day in [0,31], weekday in [0,6], hour in [0,23], minute in [0,3]
-    x_mark = torch.randint(0, 32, (batch_size, seq_length, 5))
-    # Adjust ranges if necessary, for example:
-    x_mark[:, :, 0] = torch.randint(0, 13, (batch_size, seq_length))  # month: 0-12
-    x_mark[:, :, 1] = torch.randint(0, 32, (batch_size, seq_length))  # day: 0-31
-    x_mark[:, :, 2] = torch.randint(0, 7,  (batch_size, seq_length))  # weekday: 0-6
-    x_mark[:, :, 3] = torch.randint(0, 24, (batch_size, seq_length))  # hour: 0-23
-    x_mark[:, :, 4] = torch.randint(0, 4,  (batch_size, seq_length))  # minute: 0-3 (if using minute-level for 't')
-
-    # Create the DataEmbedding instance.
-    embedder = DataEmbedding(c_in=c_in, d_model=d_model, embed_type='fixed', freq='h', dropout=0.1)
-
-    # Forward pass: returns tensor of shape (batch_size, seq_length, d_model)
-    embeddings = embedder(x, x_mark)
-    print("Output embedding shape:", embeddings.shape)
