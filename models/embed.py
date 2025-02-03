@@ -49,57 +49,38 @@ class TokenEmbedding(nn.Module):
     def forward(self, x):
         """
         x: Tensor of shape [batch, seq_len, c_in]
-
-        The forward pass mimics the second code’s behavior:
-         1. For each sample and for each valid time index t (from m*tao to end),
-            extract a “faithful vector” by gathering the values
-            [x[t, c], x[t-tao, c], ..., x[t-m*tao, c]] for each channel c,
-            with the ordering being channel‐major.
-         2. Optionally pad the extracted sequence along the time dimension.
-         3. Split the flattened faithful vector into c_in pieces of length (m+1)
-            and apply self.conv to each. For the last channel split, if needed,
-            also apply self.leftout_conv.
-         4. Concatenate all convolution outputs to yield a final output with d_model channels.
+        
+        This forward pass mimics the functionality of the original loop-based version.
         """
         batch_size, seq_len, c_in = x.shape
         device = x.device
 
-        # ----- Step 1. Vectorized Faithful Vector Extraction -----
-        # Valid time steps start at t0 = m*tao and go up to seq_len - 1.
+        # Step 1: Vectorized faithful vector extraction.
         L = seq_len - self.m * self.tao  # number of valid time steps
         valid_t = torch.arange(self.m * self.tao, seq_len, device=device)  # shape: [L]
-        # Offsets: we want to gather values at [t, t-tao, t-2*tao, ..., t-m*tao]
         offset = torch.arange(0, self.m + 1, device=device) * self.tao  # shape: [m+1]
-        # For each valid t, compute indices: shape: [L, m+1]
-        indices = valid_t.unsqueeze(1) - offset.unsqueeze(0)
-        # Expand indices for each sample in the batch: shape [batch, L, m+1]
-        indices = indices.unsqueeze(0).expand(batch_size, -1, -1)
-        # To gather from x along the time dimension (dim=1), we need the index tensor
-        # to have the same number of dimensions as x. x is [batch, seq_len, c_in],
-        # so we unsqueeze x to shape [batch, seq_len, 1, c_in].
-        x_unsq = x.unsqueeze(2)  # shape: [batch, seq_len, 1, c_in]
-        # Expand indices to shape [batch, L, m+1, c_in]
+        indices = valid_t.unsqueeze(1) - offset.unsqueeze(0)  # shape: [L, m+1]
+        indices = indices.unsqueeze(0).expand(batch_size, -1, -1)  # shape: [batch, L, m+1]
+
+        # Expand indices to include the channel dimension: [batch, L, m+1, c_in]
         indices_exp = indices.unsqueeze(-1).expand(batch_size, L, self.m + 1, c_in)
-        # Gather: this returns a tensor of shape [batch, L, m+1, c_in]
-        extracted = torch.gather(x_unsq, 1, indices_exp)
-        # Permute to [batch, L, c_in, m+1]
+        # Gather along dimension 1 directly from x (which has shape [batch, seq_len, c_in]).
+        extracted = torch.gather(x, dim=1, index=indices_exp)  # shape: [batch, L, m+1, c_in]
+        # Permute to [batch, L, c_in, m+1] so that the (m+1) sequence is last.
         extracted = extracted.permute(0, 1, 3, 2).contiguous()
-        # Flatten the last two dimensions: shape becomes [batch, L, c_in*(m+1)]
+        # Flatten the last two dimensions: shape [batch, L, c_in*(m+1)]
         x_embedded = extracted.view(batch_size, L, c_in * (self.m + 1))
 
-        # ----- Step 2. Optional Padding -----
+        # Step 2: Optional padding on the sequence dimension.
         if self.pad:
-            # Pad the sequence dimension at the beginning with m*tao zeros.
-            # (F.pad takes the pad sizes as (last_dim_left, last_dim_right, next_dim_left, next_dim_right, ...))
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
 
-        # ----- Step 3. Split and Convolve -----
-        # The faithful vector is of dimension c_in*(m+1).
-        # We split it into c_in chunks along the last dimension; each chunk has shape (m+1).
+        # Step 3: Split into c_in chunks and apply convolutions.
+        # Each chunk corresponds to one channel and has size (m+1)
         x_splits = torch.split(x_embedded, self.m + 1, dim=2)  # Tuple of length c_in
         conv_outputs = []
         for i, chunk in enumerate(x_splits):
-            # Permute each chunk to shape [batch, m+1, seq_length] for Conv1d
+            # Permute chunk to shape [batch, m+1, seq_length] for Conv1d.
             chunk = chunk.permute(0, 2, 1).contiguous()
             out_conv = self.conv(chunk)  # shape: [batch, self.kernels, seq_length]
             conv_outputs.append(out_conv)
@@ -108,13 +89,11 @@ class TokenEmbedding(nn.Module):
                 out_left = self.leftout_conv(chunk)  # shape: [batch, extra_channels, seq_length]
                 conv_outputs.append(out_left)
 
-        # ----- Step 4. Concatenate and Rearrange -----
-        # Concatenate along the channel dimension: [batch, d_model, seq_length]
-        out = torch.cat(conv_outputs, dim=1)
-        # Finally, transpose to [batch, seq_length, d_model]
-        out = out.transpose(1, 2).contiguous()
+        # Step 4: Concatenate the convolution outputs and adjust shape.
+        out = torch.cat(conv_outputs, dim=1)  # shape: [batch, d_model, seq_length]
+        out = out.transpose(1, 2).contiguous()  # shape: [batch, seq_length, d_model]
         return out
-        
+ 
 #############################################
 # 2. (Optional) Other Embedding Modules
 #############################################
