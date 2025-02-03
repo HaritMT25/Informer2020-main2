@@ -21,7 +21,7 @@ class TokenEmbedding(nn.Module):
                              padding=1, padding_mode='circular')
         
         if self.remainder > 0:
-            self.conv_remainder = nn.Conv1d(m+1, 1, kernel_size=3,  # Output 1 channel per remainder
+            self.conv_remainder = nn.Conv1d(m+1, 1, kernel_size=3, 
                                            padding=1, padding_mode='circular')
         
         for module in self.modules():
@@ -49,21 +49,24 @@ class TokenEmbedding(nn.Module):
         conv_out = self.conv(x_windows)  # [batch*c_in, kernels, valid_seq]
         
         if self.remainder > 0:
-            # Process remainder for the first 'remainder' channels
-            x_windows_remainder = x_windows[:self.remainder]
-            rem_out = self.conv_remainder(x_windows_remainder)  # [remainder, 1, valid_seq]
+            # Calculate number of entries needing remainder (batch_size * remainder channels)
+            num_remainder_entries = batch_size * self.remainder
             
-            # Split the main convolution output
-            conv_out_remainder = conv_out[:self.remainder]
-            conv_out_rest = conv_out[self.remainder:]
+            # Process remainder for the first 'num_remainder_entries' channels across batches
+            x_windows_remainder = x_windows[:num_remainder_entries]
+            rem_out = self.conv_remainder(x_windows_remainder)  # [num_remainder_entries, 1, valid_seq]
             
-            # Concatenate remainder channels
-            conv_out_remainder = torch.cat([conv_out_remainder, rem_out], dim=1)
+            # Split main convolution output
+            conv_out_remainder_part = conv_out[:num_remainder_entries]  # [num_remainder_entries, kernels, valid_seq]
+            conv_out_rest = conv_out[num_remainder_entries:]  # [remaining_entries, kernels, valid_seq]
             
-            # Merge back
-            conv_out = torch.cat([conv_out_remainder, conv_out_rest], dim=0)
+            # Concatenate remainder output to the corresponding part
+            conv_out_remainder_updated = torch.cat([conv_out_remainder_part, rem_out], dim=1)
+            
+            # Merge back with the rest
+            conv_out = torch.cat([conv_out_remainder_updated, conv_out_rest], dim=0)
         
-        # Reshape to [batch, valid_seq, c_in, d_model//c_in + (1 if remainder else 0)]
+        # Reshape to [batch, valid_seq, d_model]
         out = conv_out.view(batch_size, self.c_in, -1, conv_out.shape[-1])
         out = out.permute(0, 3, 1, 2).reshape(batch_size, -1, self.d_model)
         
