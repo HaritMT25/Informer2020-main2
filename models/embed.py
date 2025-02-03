@@ -4,104 +4,87 @@ import torch.nn.functional as F
 import math
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, m=7, tau=3):
-        """
-        c_in   : number of channels (e.g. 7)
-        d_model: desired output dimension (should equal 73*c_in + 1, e.g. 512 when c_in=7)
-        m      : number of previous steps to look back (here 7)
-        tau    : skip (stride) between timesteps (here 3)
-        """
+    def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
         super(TokenEmbedding, self).__init__()
+        self.tao = tao
         self.m = m
-        self.tau = tau
+        self.d_model = d_model
+        self.pad = pad
         self.c_in = c_in
-        self.kernel_size = m + 1   # total number of values per channel = current + m previous = 8
-        # We pad the beginning with m*tau zeros so that even early timesteps get a full window.
-        self.padding = m * tau   # for m=7, tau=3, pad with 21 zeros
-        self.num_kernels = 74    # total kernels
-        
-        # Create 74 kernels, each of size (kernel_size x 3)
-        self.kernels = nn.Parameter(torch.randn(self.num_kernels, self.kernel_size, 3))
-        
-        # (Optional) Check that the output dimension equals d_model.
-        expected_d_model = (self.num_kernels - 1) * c_in + 1
-        if d_model != expected_d_model:
-            raise ValueError(f"d_model should be {(self.num_kernels - 1) * c_in + 1} but got {d_model}")
+        self.kernels=int(d_model/c_in)
+        # Initialize the embedding layers
+        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular')
+
+        # Weight initialization for the conv layer
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+
+
+    # vector for each t
+    def construct_faithful_vec(self, t, ts_batch, tao, m):
+      # ts_batch  = [n_seq, cin]
+      faithful_vec = []
+      a = []
+      for c in range(ts_batch.shape[1]):
+        for i in range(m+1):
+          a.append(ts_batch[t-i*tao][c])
+      # cin*(m+1)
+      a = np.array(a).reshape(1, -1)
+      return a
+
+
+    # vecs for all t, per batch
+    def data_extract(self, ts_batch, tao=3, m=5):
+      # ts_batch.shape [n_seq, cin]
+      n_seq, cin = ts_batch.shape
+      data_total = None
+      for t in range(m*tao, n_seq):
+        if t == m*tao:
+          data_total  = torch.tensor(construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        else:
+          new_data = torch.tensor(construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+          data_total = torch.cat((data_total, new_data), dim=0)
+      # slicing
+      # data_total.shape = [n_seq, cin]
+      return data_total
 
     def forward(self, x):
-        """
-        x: Tensor of shape (batch_size, seq_length, c_in)
-        Returns:
-           Tensor of shape (batch_size, seq_length, d_model)
-           where d_model = 73*c_in + 1 (e.g. 512 when c_in=7)
-        """
-        batch, seq_length, c_in = x.size()
-        outputs = []  # will collect outputs of shape (batch, seq_length)
+        """Forward pass of the TokenEmbedding layer."""
+        # expects x.type = numpy array
+        batch_size, seq_len, cin = x.shape
+        x_list = []
 
-        # Process each channel with the first 73 kernels.
-        for channel in range(c_in):
-            # Extract data for this channel: shape (batch, seq_length)
-            channel_data = x[:, :, channel]
-            # Pad the beginning with zeros along the time dimension.
-            # After padding, the time dimension becomes (seq_length + self.padding)
-            padded = F.pad(channel_data, (self.padding, 0), mode="constant", value=0)  # shape: (B, T+padding)
-            # Unsqueeze once so padded becomes (B, T+padding, 1)
-            padded = padded.unsqueeze(-1)
-            # Expand the last dimension to kernel_size so that padded becomes (B, T+padding, kernel_size)
-            padded = padded.expand(-1, -1, self.kernel_size)
-            
-            # For every timestep t in the original sequence, we need to collect 8 values:
-            # the current value at index t+padding, then t+padding - tau, t+padding - 2*tau, ... t+padding - m*tau.
-            # Generate base indices for each timestep.
-            t_indices = torch.arange(self.padding, self.padding + seq_length, device=x.device)  # shape (seq_length,)
-            # Create offsets: 0, tau, 2*tau, ..., m*tau (length = kernel_size)
-            offsets = torch.arange(0, self.kernel_size * self.tau, self.tau, device=x.device)  # shape (kernel_size,)
-            # For each timestep, subtract the offsets. The resulting shape is (seq_length, kernel_size)
-            window_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
-            # Expand indices to include the batch dimension: shape becomes (batch, seq_length, kernel_size)
-            indices_expanded = window_indices.expand(batch, -1, -1)
-            
-            # Now, gather the required values along dimension 1.
-            # padded: (B, T+padding, kernel_size)
-            # indices_expanded: (B, seq_length, kernel_size)
-            # The output will have shape (B, seq_length, kernel_size)
-            channel_windows = padded.gather(dim=1, index=indices_expanded)
-            
-            # Rearrange channel_windows from (B, seq_length, kernel_size)
-            # to (B, 1, kernel_size, seq_length) for convolution.
-            conv_input = channel_windows.transpose(1, 2).unsqueeze(1)
-            # Now, for each of the first 73 kernels, apply a convolution.
-            for k in range(self.num_kernels - 1):  # kernels 0 to 72
-                # Reshape the k-th kernel to (1, 1, kernel_size, 3)
-                kernel = self.kernels[k].unsqueeze(0).unsqueeze(0)
-                # Convolve: input shape is (B, 1, kernel_size, seq_length)
-                # We use horizontal padding of 1 (width padding) so that the output time dimension remains seq_length.
-                conv_out = F.conv2d(conv_input, kernel, stride=1, padding=(0, 1))
-                # conv_out shape: (B, 1, 1, seq_length) → squeeze to (B, seq_length)
-                conv_out = conv_out.squeeze(1).squeeze(1)
-                outputs.append(conv_out)
-                
-        # Next, apply the 74th kernel on a randomly chosen channel.
-        random_channel = torch.randint(0, c_in, (1,)).item()
-        channel_data = x[:, :, random_channel]  # shape: (B, seq_length)
-        padded = F.pad(channel_data, (self.padding, 0), mode="constant", value=0)  # shape: (B, T+padding)
-        padded = padded.unsqueeze(-1)   # shape: (B, T+padding, 1)
-        padded = padded.expand(-1, -1, self.kernel_size)  # shape: (B, T+padding, kernel_size)
-        t_indices = torch.arange(self.padding, self.padding + seq_length, device=x.device)
-        offsets = torch.arange(0, self.kernel_size * self.tau, self.tau, device=x.device)
-        window_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
-        indices_expanded = window_indices.expand(batch, -1, -1)
-        channel_windows = padded.gather(dim=1, index=indices_expanded)
-        conv_input = channel_windows.transpose(1, 2).unsqueeze(1)
-        kernel = self.kernels[-1].unsqueeze(0).unsqueeze(0)
-        conv_out = F.conv2d(conv_input, kernel, stride=1, padding=(0, 1))
-        conv_out = conv_out.squeeze(1).squeeze(1)
-        outputs.append(conv_out)
-        
-        # Stack all outputs along the last dimension.
-        # The resulting tensor will have shape (B, seq_length, d_model)
-        out_tensor = torch.stack(outputs, dim=-1)
-        return out_tensor
+        # Ensure x is a PyTorch tensor
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
+        for batch_val in range(batch_size):
+            ts_batch = x[batch_val]
+            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
+            x_list.append(extracted_data)
+
+        # Convert the list back into a tensor
+        x_embedded = torch.tensor(np.array(x_list), dtype=torch.float32).to(x.device)
+        if self.pad == True:
+          x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
+        x_embedded1=torch.split(x_embedded,self.m+1,dim=2)
+        channel_splitter=[]
+
+
+        for j in range(len(x_embedded1)):
+          channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
+          if j == (len(x_embedded1)-1):
+            leftout_conv = nn.Conv1d(in_channels=self.m+1, out_channels=self.d_model - self.c_in*self.kernels, kernel_size=3, padding=1, padding_mode='circular')
+            channel_splitter.append(leftout_conv(x_embedded1[j].permute((0, 2, 1))))
+
+
+
+           #### concatenates d_model/c_in to avoid channel mixing
+        x_embedded=torch.cat(channel_splitter,dim=1).transpose(1,2)
+        #x_embedded = self.conv(x_embedded.permute((0, 2, 1))).transpose(1,2)
+
+        return x_embedded
 #############################################
 # 2. (Optional) Other Embedding Modules
 #############################################
