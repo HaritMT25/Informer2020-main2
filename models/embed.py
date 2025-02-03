@@ -7,6 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
         super(TokenEmbedding, self).__init__()
@@ -15,81 +20,66 @@ class TokenEmbedding(nn.Module):
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
-        self.kernels=int(d_model/c_in)
-        # Initialize the embedding layers
-        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        self.kernels = d_model // c_in
+        self.remainder = d_model % c_in
+        
+        # Calculate valid sequence length after extraction
+        self.valid_seq_len = lambda seq_len: seq_len - m*tao
+        
+        # Main convolutional layers
+        self.conv = nn.Conv1d(m+1, self.kernels, kernel_size=3, 
+                             padding=1, padding_mode='circular')
+        
+        # Remainder convolution if needed
+        if self.remainder > 0:
+            self.conv_remainder = nn.Conv1d(m+1, self.remainder, kernel_size=3,
+                                           padding=1, padding_mode='circular')
+        
+        # Initialize weights
+        for module in self.modules():
+            if isinstance(module, nn.Conv1d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-        # Weight initialization for the conv layer
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
-
-
-    # vector for each t
-    def construct_faithful_vec(self, t, ts_batch, tao, m):
-      # ts_batch  = [n_seq, cin]
-      faithful_vec = []
-      a = []
-      for c in range(ts_batch.shape[1]):
-        for i in range(m+1):
-          a.append(ts_batch[t-i*tao][c])
-      # cin*(m+1)
-      return torch.tensor(a, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')).reshape(1, -1)
-
-
-    # vecs for all t, per batch
-    def data_extract(self, ts_batch, tao=3, m=5):
-      # ts_batch.shape [n_seq, cin]
-      n_seq, cin = ts_batch.shape
-      data_total = None
-      device_used = 'cuda' if torch.cuda.is_available() else 'cpu'
-      for t in range(m*tao, n_seq):
-        if t == m*tao:
-          data_total  = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
-        else:
-          new_data = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
-          data_total = torch.cat((data_total, new_data), dim=0)
-      # slicing
-      # data_total.shape = [n_seq, cin]
-      return data_total
+    def create_sliding_windows(self, x):
+        """Vectorized implementation of data extraction"""
+        batch_size, seq_len, _ = x.shape
+        window_size = self.m + 1
+        
+        # Create indices for sliding windows
+        indices = torch.arange(self.m*self.tao, seq_len, device=x.device)
+        window_indices = indices.unsqueeze(1) - torch.arange(0, window_size*self.tao, self.tao, device=x.device).flip(0)
+        
+        # Gather values and reshape
+        x = x.gather(1, window_indices.view(1, -1).expand(batch_size, -1).unsqueeze(-1).expand(-1, -1, self.c_in))
+        return x.view(batch_size, -1, window_size, self.c_in).permute(0, 3, 2, 1).reshape(batch_size*self.c_in, window_size, -1)
 
     def forward(self, x):
-        """Forward pass of the TokenEmbedding layer."""
-        # expects x.type = numpy array
-        batch_size, seq_len, cin = x.shape
-        x_list = []
-
-        # Ensure x is a PyTorch tensor
         if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
-        for batch_val in range(batch_size):
-            ts_batch = x[batch_val]
-            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
-            x_list.append(extracted_data)
-
-
-        # Convert the list back into a tensor
-        x_embedded = torch.stack(x_list).to(x.device)
-        if self.pad == True:
-          x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
-        x_embedded1=torch.split(x_embedded,self.m+1,dim=2)
-        channel_splitter=[]
-
-
-        for j in range(len(x_embedded1)):
-          channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
-          if j == (len(x_embedded1)-1):
-            leftout_conv = nn.Conv1d(in_channels=self.m+1, out_channels=self.d_model - self.c_in*self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(x.device)
-            channel_splitter.append(leftout_conv(x_embedded1[j].permute((0, 2, 1))).to(x.device))
-
-
-
-           #### concatenates d_model/c_in to avoid channel mixing
-        x_embedded=torch.cat(channel_splitter,dim=1).transpose(1,2)
-        #x_embedded = self.conv(x_embedded.permute((0, 2, 1))).transpose(1,2)
-
-        return x_embedded
+            x = torch.tensor(x, dtype=torch.float32, device=self.conv.weight.device)
+        
+        batch_size, seq_len, _ = x.shape
+        x = x.to(self.conv.weight.device)
+        
+        # Create sliding windows vectorized
+        x_windows = self.create_sliding_windows(x)  # [batch*c_in, m+1, valid_seq]
+        
+        # Apply convolutions
+        conv_out = self.conv(x_windows)  # [batch*c_in, kernels, valid_seq]
+        
+        # Process remainder if needed
+        if self.remainder > 0:
+            rem_out = self.conv_remainder(x_windows[:self.remainder])  # [remainder, rem_out, valid_seq]
+            conv_out = torch.cat([conv_out, rem_out], dim=1)
+        
+        # Reshape back to original dimensions
+        out = conv_out.view(batch_size, self.c_in, -1, conv_out.shape[-1])  # [batch, c_in, d_model//c_in, valid_seq]
+        out = out.permute(0, 3, 1, 2).reshape(batch_size, -1, self.d_model)  # [batch, valid_seq, d_model]
+        
+        # Apply padding if needed
+        if self.pad:
+            out = F.pad(out, (0, 0, self.m*self.tao, 0))
+        
+        return out
  
 #############################################
 # 2. (Optional) Other Embedding Modules
