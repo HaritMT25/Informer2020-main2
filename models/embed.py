@@ -66,7 +66,7 @@ class TokenEmbedding(nn.Module):
             x_list.append(extracted_data)
 
         # Convert the list back into a tensor
-        x_embedded = torch.tensor(np.array(x_list), dtype=torch.float32).to(x.device)
+        x_embedded = torch.stack(x_list, dim=0)
         if self.pad == True:
           x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
         x_embedded1=torch.split(x_embedded,self.m+1,dim=2)
