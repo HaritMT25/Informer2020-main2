@@ -3,10 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-#############################################
-# 1. TokenEmbedding as described
-#############################################
-
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, m=7, tau=3):
         """
@@ -49,33 +45,33 @@ class TokenEmbedding(nn.Module):
             # Pad the beginning with zeros along the time dimension.
             # After padding, the time dimension becomes (seq_length + self.padding)
             padded = F.pad(channel_data, (self.padding, 0), mode="constant", value=0)
+            # Add an extra dimension so padded becomes (batch, seq_length+padding, 1)
+            padded = padded.unsqueeze(-1)
             # For every timestep t in the original sequence, we need to collect 8 values:
             # t + padding (the current value) and t+padding - tau, t+padding - 2*tau, ... t+padding - m*tau.
-            # We first generate the base indices for each timestep.
+            # Generate the base indices for each timestep.
             t_indices = torch.arange(self.padding, self.padding + seq_length, device=x.device)  # shape (seq_length,)
             # Create offset values: 0, tau, 2*tau, ... m*tau. (Total length = kernel_size.)
             offsets = torch.arange(0, self.kernel_size * self.tau, self.tau, device=x.device)  # shape (kernel_size,)
             # For each t, subtract the offsets. The resulting indices have shape (seq_length, kernel_size)
             window_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
-            # Now, for each batch element we gather the corresponding values.
-            # padded has shape (batch, seq_length + padding); we gather along dimension 1.
-            # The result is a tensor of shape (batch, seq_length, kernel_size)
-            channel_windows = padded.gather(1, window_indices.expand(batch, -1, -1))
+            # Expand indices to match batch dimension: (batch, seq_length, kernel_size)
+            indices_expanded = window_indices.expand(batch, -1, -1)
+            # Gather the required values. After gather, shape will be (batch, seq_length, kernel_size, 1)
+            channel_windows = padded.gather(1, indices_expanded)
+            # Squeeze out the last dimension: (batch, seq_length, kernel_size)
+            channel_windows = channel_windows.squeeze(-1)
             
-            # For convolution we want to view each window as a “vertical column”.
             # Rearrange channel_windows from (batch, seq_length, kernel_size)
-            # to (batch, 1, kernel_size, seq_length)
+            # to (batch, 1, kernel_size, seq_length) for the convolution.
             conv_input = channel_windows.transpose(1, 2).unsqueeze(1)
             # Now, for every one of the first 73 kernels, apply a convolution.
-            # Each kernel is of size (kernel_size x 3); in conv2d terms, that is (8, 3)
-            # We set the padding so that the convolution along the time dimension (width)
-            # preserves the number of timesteps. Since the kernel’s width is 3, we use pad 1 horizontally.
             for k in range(self.num_kernels - 1):  # 0 to 72 (73 kernels)
                 # Reshape the k-th kernel to (1, 1, kernel_size, 3)
                 kernel = self.kernels[k].unsqueeze(0).unsqueeze(0)
                 # Convolve: input shape is (batch, 1, kernel_size, seq_length)
-                # Kernel shape is (1, 1, kernel_size, 3). Because the kernel’s height equals the full vertical dimension,
-                # the output height becomes 1. We use padding=(0,1) so that the width (time dimension) remains seq_length.
+                # Kernel shape is (1, 1, kernel_size, 3). Since the kernel’s width is 3,
+                # we use horizontal padding of 1 to preserve the seq_length dimension.
                 conv_out = F.conv2d(conv_input, kernel, stride=1, padding=(0, 1))
                 # conv_out shape: (batch, 1, 1, seq_length) → squeeze to (batch, seq_length)
                 conv_out = conv_out.squeeze(1).squeeze(1)
@@ -85,10 +81,13 @@ class TokenEmbedding(nn.Module):
         random_channel = torch.randint(0, c_in, (1,)).item()
         channel_data = x[:, :, random_channel]  # shape (batch, seq_length)
         padded = F.pad(channel_data, (self.padding, 0), mode="constant", value=0)
+        padded = padded.unsqueeze(-1)
         t_indices = torch.arange(self.padding, self.padding + seq_length, device=x.device)
         offsets = torch.arange(0, self.kernel_size * self.tau, self.tau, device=x.device)
         window_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
-        channel_windows = padded.gather(1, window_indices.expand(batch, -1, -1))
+        indices_expanded = window_indices.expand(batch, -1, -1)
+        channel_windows = padded.gather(1, indices_expanded)
+        channel_windows = channel_windows.squeeze(-1)
         conv_input = channel_windows.transpose(1, 2).unsqueeze(1)
         kernel = self.kernels[-1].unsqueeze(0).unsqueeze(0)
         conv_out = F.conv2d(conv_input, kernel, stride=1, padding=(0, 1))
@@ -96,8 +95,6 @@ class TokenEmbedding(nn.Module):
         outputs.append(conv_out)
         
         # Stack all outputs along the last dimension.
-        # For c_in channels and 73 kernels per channel plus one extra,
-        # the total feature dimension is (73*c_in + 1). For c_in=7, that equals 73*7 + 1 = 512.
         out_tensor = torch.stack(outputs, dim=-1)  # shape: (batch, seq_length, d_model)
         return out_tensor
 
