@@ -2,16 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
         super(TokenEmbedding, self).__init__()
@@ -23,33 +13,26 @@ class TokenEmbedding(nn.Module):
         self.kernels = d_model // c_in
         self.remainder = d_model % c_in
         
-        # Calculate valid sequence length after extraction
         self.valid_seq_len = lambda seq_len: seq_len - m*tao
         
-        # Main convolutional layers
         self.conv = nn.Conv1d(m+1, self.kernels, kernel_size=3, 
                              padding=1, padding_mode='circular')
         
-        # Remainder convolution if needed
         if self.remainder > 0:
-            self.conv_remainder = nn.Conv1d(m+1, self.remainder, kernel_size=3,
+            self.conv_remainder = nn.Conv1d(m+1, 1, kernel_size=3,  # Output 1 channel per remainder
                                            padding=1, padding_mode='circular')
         
-        # Initialize weights
         for module in self.modules():
             if isinstance(module, nn.Conv1d):
                 nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
     def create_sliding_windows(self, x):
-        """Vectorized implementation of data extraction"""
         batch_size, seq_len, _ = x.shape
         window_size = self.m + 1
         
-        # Create indices for sliding windows
         indices = torch.arange(self.m*self.tao, seq_len, device=x.device)
         window_indices = indices.unsqueeze(1) - torch.arange(0, window_size*self.tao, self.tao, device=x.device).flip(0)
         
-        # Gather values and reshape
         x = x.gather(1, window_indices.view(1, -1).expand(batch_size, -1).unsqueeze(-1).expand(-1, -1, self.c_in))
         return x.view(batch_size, -1, window_size, self.c_in).permute(0, 3, 2, 1).reshape(batch_size*self.c_in, window_size, -1)
 
@@ -60,27 +43,32 @@ class TokenEmbedding(nn.Module):
         batch_size, seq_len, _ = x.shape
         x = x.to(self.conv.weight.device)
         
-        # Create sliding windows vectorized
         x_windows = self.create_sliding_windows(x)  # [batch*c_in, m+1, valid_seq]
-        
-        # Apply convolutions
         conv_out = self.conv(x_windows)  # [batch*c_in, kernels, valid_seq]
         
-        # Process remainder if needed
         if self.remainder > 0:
-            rem_out = self.conv_remainder(x_windows[:self.remainder])  # [remainder, rem_out, valid_seq]
-            conv_out = torch.cat([conv_out, rem_out], dim=1)
+            # Process remainder for the first 'remainder' channels
+            x_windows_remainder = x_windows[:self.remainder]
+            rem_out = self.conv_remainder(x_windows_remainder)  # [remainder, 1, valid_seq]
+            
+            # Split the main convolution output
+            conv_out_remainder = conv_out[:self.remainder]
+            conv_out_rest = conv_out[self.remainder:]
+            
+            # Concatenate remainder channels
+            conv_out_remainder = torch.cat([conv_out_remainder, rem_out], dim=1)
+            
+            # Merge back
+            conv_out = torch.cat([conv_out_remainder, conv_out_rest], dim=0)
         
-        # Reshape back to original dimensions
-        out = conv_out.view(batch_size, self.c_in, -1, conv_out.shape[-1])  # [batch, c_in, d_model//c_in, valid_seq]
-        out = out.permute(0, 3, 1, 2).reshape(batch_size, -1, self.d_model)  # [batch, valid_seq, d_model]
+        # Reshape to [batch, valid_seq, c_in, d_model//c_in + (1 if remainder else 0)]
+        out = conv_out.view(batch_size, self.c_in, -1, conv_out.shape[-1])
+        out = out.permute(0, 3, 1, 2).reshape(batch_size, -1, self.d_model)
         
-        # Apply padding if needed
         if self.pad:
             out = F.pad(out, (0, 0, self.m*self.tao, 0))
         
         return out
- 
 #############################################
 # 2. (Optional) Other Embedding Modules
 #############################################
