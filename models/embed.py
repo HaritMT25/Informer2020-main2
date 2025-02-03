@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +20,6 @@ class TokenEmbedding(nn.Module):
         self.pad = pad
         self.c_in = c_in
         # Compute the number of output channels per split.
-        # (d_model is intended to be c_in * kernels plus possibly some extra channels.)
         self.kernels = d_model // c_in
 
         # Primary convolution applied to each split (operates on (m+1)-length inputs)
@@ -34,7 +32,7 @@ class TokenEmbedding(nn.Module):
         )
         nn.init.kaiming_normal_(self.conv.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-        # Determine if an extra convolution is needed on the last channel split
+        # Determine if an extra convolution is needed on the last channel split.
         extra_channels = d_model - c_in * self.kernels
         if extra_channels > 0:
             self.leftout_conv = nn.Conv1d(
@@ -66,59 +64,54 @@ class TokenEmbedding(nn.Module):
         batch_size, seq_len, c_in = x.shape
         device = x.device
 
-        # ----- Step 1. Vectorized faithful vector extraction -----
-        # Valid time steps start at t0 = m*tao and go up to seq_len-1.
-        # Let L denote the number of valid time steps.
-        L = seq_len - self.m * self.tao
-        # valid_t: shape (L,)
-        valid_t = torch.arange(self.m * self.tao, seq_len, device=device)
-        # Offsets: we want to gather values at [t, t-tao, ..., t-m*tao].
-        # offset: shape (m+1,)
-        offset = torch.arange(0, self.m + 1, device=device) * self.tao
-        # For each valid t, compute indices: shape (L, m+1)
+        # ----- Step 1. Vectorized Faithful Vector Extraction -----
+        # Valid time steps start at t0 = m*tao and go up to seq_len - 1.
+        L = seq_len - self.m * self.tao  # number of valid time steps
+        valid_t = torch.arange(self.m * self.tao, seq_len, device=device)  # shape: [L]
+        # Offsets: we want to gather values at [t, t-tao, t-2*tao, ..., t-m*tao]
+        offset = torch.arange(0, self.m + 1, device=device) * self.tao  # shape: [m+1]
+        # For each valid t, compute indices: shape: [L, m+1]
         indices = valid_t.unsqueeze(1) - offset.unsqueeze(0)
-        # Expand indices to apply for every sample in the batch:
-        # New shape: (batch, L, m+1)
+        # Expand indices for each sample in the batch: shape [batch, L, m+1]
         indices = indices.unsqueeze(0).expand(batch_size, -1, -1)
-        # x has shape [batch, seq_len, c_in]. We need to gather along the time dimension.
-        # To use torch.gather, we expand indices to shape [batch, L, m+1, 1] then to [batch, L, m+1, c_in].
+        # To gather from x along the time dimension (dim=1), we need the index tensor
+        # to have the same number of dimensions as x. x is [batch, seq_len, c_in],
+        # so we unsqueeze x to shape [batch, seq_len, 1, c_in].
+        x_unsq = x.unsqueeze(2)  # shape: [batch, seq_len, 1, c_in]
+        # Expand indices to shape [batch, L, m+1, c_in]
         indices_exp = indices.unsqueeze(-1).expand(batch_size, L, self.m + 1, c_in)
-        # Gather: shape becomes [batch, L, m+1, c_in]
-        extracted = torch.gather(x, 1, indices_exp)
-        # Now, we want to reorder so that for each time step, the (m+1) values for each channel are grouped.
+        # Gather: this returns a tensor of shape [batch, L, m+1, c_in]
+        extracted = torch.gather(x_unsq, 1, indices_exp)
         # Permute to [batch, L, c_in, m+1]
         extracted = extracted.permute(0, 1, 3, 2).contiguous()
-        # Flatten the last two dimensions to obtain shape [batch, L, c_in*(m+1)]
+        # Flatten the last two dimensions: shape becomes [batch, L, c_in*(m+1)]
         x_embedded = extracted.view(batch_size, L, c_in * (self.m + 1))
 
         # ----- Step 2. Optional Padding -----
         if self.pad:
-            # The original second code pads the sequence dimension at the top with (m*tao) zeros.
-            # F.pad expects pad in the order (pad_left, pad_right, pad_top, pad_bottom) for 2D data.
+            # Pad the sequence dimension at the beginning with m*tao zeros.
+            # (F.pad takes the pad sizes as (last_dim_left, last_dim_right, next_dim_left, next_dim_right, ...))
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
-            # After padding, the sequence length becomes L + m*tao == seq_len
 
         # ----- Step 3. Split and Convolve -----
-        # The flattened faithful vector has dimension c_in*(m+1).
-        # Split it into c_in chunks along the channel (last) dimension.
-        # Each chunk is of size (m+1), matching the conv’s expected in_channels.
-        x_splits = torch.split(x_embedded, self.m + 1, dim=2)  # Tuple of length c_in; each is [batch, seq_len, m+1]
-
+        # The faithful vector is of dimension c_in*(m+1).
+        # We split it into c_in chunks along the last dimension; each chunk has shape (m+1).
+        x_splits = torch.split(x_embedded, self.m + 1, dim=2)  # Tuple of length c_in
         conv_outputs = []
         for i, chunk in enumerate(x_splits):
-            # Permute chunk to shape [batch, m+1, seq_len] for Conv1d (which expects [batch, channels, length])
+            # Permute each chunk to shape [batch, m+1, seq_length] for Conv1d
             chunk = chunk.permute(0, 2, 1).contiguous()
-            out_conv = self.conv(chunk)  # shape: [batch, self.kernels, seq_len]
+            out_conv = self.conv(chunk)  # shape: [batch, self.kernels, seq_length]
             conv_outputs.append(out_conv)
-            # For the last split, also apply leftout_conv if it exists
+            # For the last split, also apply leftout_conv if needed.
             if i == len(x_splits) - 1 and self.leftout_conv is not None:
-                out_left = self.leftout_conv(chunk)  # shape: [batch, extra_channels, seq_len]
+                out_left = self.leftout_conv(chunk)  # shape: [batch, extra_channels, seq_length]
                 conv_outputs.append(out_left)
 
         # ----- Step 4. Concatenate and Rearrange -----
-        # Concatenate along the channel dimension so that the total channels become d_model.
-        out = torch.cat(conv_outputs, dim=1)  # shape: [batch, d_model, seq_len]
-        # Finally, transpose to shape [batch, seq_len, d_model] (matching the second code’s output)
+        # Concatenate along the channel dimension: [batch, d_model, seq_length]
+        out = torch.cat(conv_outputs, dim=1)
+        # Finally, transpose to [batch, seq_length, d_model]
         out = out.transpose(1, 2).contiguous()
         return out
         
