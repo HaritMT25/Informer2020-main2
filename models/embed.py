@@ -14,7 +14,7 @@ class TokenEmbedding(nn.Module):
         self.c_in = c_in
         self.kernels=int(d_model/c_in)
         # Initialize the embedding layers
-        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular')
+        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
         # Weight initialization for the conv layer
         for m in self.modules():
@@ -31,8 +31,7 @@ class TokenEmbedding(nn.Module):
         for i in range(m+1):
           a.append(ts_batch[t-i*tao][c])
       # cin*(m+1)
-      a = np.array(a).reshape(1, -1)
-      return a
+      return torch.tensor(a, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')).reshape(1, -1)
 
 
     # vecs for all t, per batch
@@ -40,52 +39,54 @@ class TokenEmbedding(nn.Module):
       # ts_batch.shape [n_seq, cin]
       n_seq, cin = ts_batch.shape
       data_total = None
+      device_used = 'cuda' if torch.cuda.is_available() else 'cpu'
       for t in range(m*tao, n_seq):
         if t == m*tao:
-          data_total  = torch.tensor(self.construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+          data_total  = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
         else:
-          new_data = torch.tensor(self.construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+          new_data = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
           data_total = torch.cat((data_total, new_data), dim=0)
       # slicing
       # data_total.shape = [n_seq, cin]
       return data_total
 
-def forward(self, x):
-    # expects x.type = numpy array
-    batch_size, seq_len, cin = x.shape
-    x_list = []
+    def forward(self, x):
+        """Forward pass of the TokenEmbedding layer."""
+        # expects x.type = numpy array
+        batch_size, seq_len, cin = x.shape
+        x_list = []
 
-    # Ensure x is a PyTorch tensor
-    if isinstance(x, np.ndarray):
-        x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        # Ensure x is a PyTorch tensor
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-    for batch_val in range(batch_size):
-        ts_batch = x[batch_val]
-        extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
-        x_list.append(extracted_data)
+        for batch_val in range(batch_size):
+            ts_batch = x[batch_val]
+            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
+            x_list.append(extracted_data)
 
-    # Instead of converting to a NumPy array and then back to a tensor,
-    # stack the tensors directly.
-    x_embedded = torch.stack(x_list, dim=0)
-    
-    if self.pad == True:
-        x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
-    
-    x_embedded1 = torch.split(x_embedded, self.m + 1, dim=2)
-    channel_splitter = []
-    
-    for j in range(len(x_embedded1)):
-        channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
-        if j == (len(x_embedded1) - 1):
-            leftout_conv = nn.Conv1d(in_channels=self.m + 1,
-                                     out_channels=self.d_model - self.c_in * self.kernels,
-                                     kernel_size=3, padding=1, padding_mode='circular')
-            channel_splitter.append(leftout_conv(x_embedded1[j].permute((0, 2, 1))))
-    
-    # Concatenate without mixing channels
-    x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
-    
-    return x_embedded
+
+        # Convert the list back into a tensor
+        x_embedded = torch.stack(x_list).to(x.device)
+        if self.pad == True:
+          x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
+        x_embedded1=torch.split(x_embedded,self.m+1,dim=2)
+        channel_splitter=[]
+
+
+        for j in range(len(x_embedded1)):
+          channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
+          if j == (len(x_embedded1)-1):
+            leftout_conv = nn.Conv1d(in_channels=self.m+1, out_channels=self.d_model - self.c_in*self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(x.device)
+            channel_splitter.append(leftout_conv(x_embedded1[j].permute((0, 2, 1))).to(x.device))
+
+
+
+           #### concatenates d_model/c_in to avoid channel mixing
+        x_embedded=torch.cat(channel_splitter,dim=1).transpose(1,2)
+        #x_embedded = self.conv(x_embedded.permute((0, 2, 1))).transpose(1,2)
+
+        return x_embedded
 
 #############################################
 # 2. (Optional) Other Embedding Modules
