@@ -39,38 +39,59 @@ class TokenEmbedding(nn.Module):
         return x.view(batch_size, -1, window_size, self.c_in).permute(0, 3, 2, 1).reshape(batch_size*self.c_in, window_size, -1)
 
     def forward(self, x):
-        if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32, device=self.conv.weight.device)
+    if isinstance(x, np.ndarray):
+        x = torch.tensor(x, dtype=torch.float32, device=self.conv.weight.device)
+    
+    batch_size, seq_len, _ = x.shape
+    x = x.to(self.conv.weight.device)
+    
+    # Create sliding windows: shape [batch*c_in, m+1, valid_seq]
+    x_windows = self.create_sliding_windows(x)
+    
+    # Apply the main convolution: output shape [batch*c_in, kernels, valid_seq]
+    conv_out = self.conv(x_windows)
+    # Reshape to [batch, c_in, kernels, valid_seq]
+    conv_out_reshaped = conv_out.view(batch_size, self.c_in, self.kernels, -1)
+    
+    if self.remainder > 0:
+        # Process the remainder channels using conv_remainder.
+        # Select the first `remainder` channels.
+        x_windows_remainder = x_windows.view(batch_size, self.c_in, self.m + 1, -1)[:, :self.remainder, :, :]
+        # Merge batch and remainder dimensions.
+        x_windows_remainder = x_windows_remainder.reshape(-1, self.m + 1, x_windows_remainder.shape[-1])
+        # Apply the remainder convolution: shape [batch*remainder, 1, valid_seq]
+        rem_out = self.conv_remainder(x_windows_remainder)
+        # Reshape to [batch, remainder, 1, valid_seq]
+        rem_out_reshaped = rem_out.view(batch_size, self.remainder, 1, -1)
         
-        batch_size, seq_len, _ = x.shape
-        x = x.to(self.conv.weight.device)
-        
-        x_windows = self.create_sliding_windows(x)  # [batch*c_in, m+1, valid_seq]
-        conv_out = self.conv(x_windows)  # [batch*c_in, kernels, valid_seq]
-        
-        # Reshape to [batch, c_in, kernels, valid_seq]
-        conv_out_reshaped = conv_out.view(batch_size, self.c_in, self.kernels, -1)
-        
-        if self.remainder > 0:
-            # Process remainder for the first 'remainder' channels per batch
-            x_windows_remainder = x_windows.view(batch_size, self.c_in, self.m +1, -1)[:, :self.remainder, :, :]
-            x_windows_remainder = x_windows_remainder.reshape(-1, self.m +1, x_windows_remainder.shape[-1])
-            rem_out = self.conv_remainder(x_windows_remainder)  # [batch*remainder, 1, valid_seq]
-            
-            # Reshape remainder output and concatenate
-            rem_out_reshaped = rem_out.view(batch_size, self.remainder, 1, -1)
-            conv_out_reshaped[:, :self.remainder] = torch.cat([
-                conv_out_reshaped[:, :self.remainder], 
-                rem_out_reshaped
-            ], dim=2)
-        
-        # Flatten to [batch, valid_seq, d_model]
-        out = conv_out_reshaped.permute(0, 3, 1, 2).reshape(batch_size, -1, self.d_model)
-        
-        if self.pad:
-            out = F.pad(out, (0, 0, self.m*self.tao, 0))
-        
-        return out
+        # For the first `remainder` channels, concatenate along the "kernel" dimension:
+        #   conv_out_reshaped[:, :remainder] has shape [batch, remainder, kernels, valid_seq]
+        #   rem_out_reshaped has shape [batch, remainder, 1, valid_seq]
+        first_embed = torch.cat([conv_out_reshaped[:, :self.remainder], rem_out_reshaped], dim=2)
+        # For the remaining channels, keep the original conv outputs.
+        if self.c_in - self.remainder > 0:
+            second_embed = conv_out_reshaped[:, self.remainder:]  # shape: [batch, c_in - remainder, kernels, valid_seq]
+            # Flatten channel and kernel dimensions separately for both parts.
+            first_embed = first_embed.reshape(batch_size, -1, first_embed.shape[-1])
+            second_embed = second_embed.reshape(batch_size, -1, second_embed.shape[-1])
+            # Concatenate along the feature dimension.
+            out = torch.cat([first_embed, second_embed], dim=1)  # shape: [batch, d_model, valid_seq]
+        else:
+            # Only remainder channels exist.
+            out = first_embed.reshape(batch_size, -1, first_embed.shape[-1])
+    else:
+        # If no remainder, just reshape.
+        out = conv_out_reshaped.reshape(batch_size, -1, conv_out_reshaped.shape[-1])
+    
+    # Permute to get shape [batch, valid_seq, d_model]
+    out = out.permute(0, 2, 1)
+    
+    if self.pad:
+        # Pad along the sequence length dimension at the beginning if needed.
+        out = F.pad(out, (0, 0, self.m*self.tao, 0))
+    
+    return out
+
 #############################################
 # 2. (Optional) Other Embedding Modules
 #############################################
