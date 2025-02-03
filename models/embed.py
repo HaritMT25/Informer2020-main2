@@ -42,9 +42,9 @@ class TokenEmbedding(nn.Module):
       data_total = None
       for t in range(m*tao, n_seq):
         if t == m*tao:
-          data_total  = torch.tensor(construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+          data_total  = torch.tensor(self.construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
         else:
-          new_data = torch.tensor(construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+          new_data = torch.tensor(self.construct_faithful_vec(t, ts_batch, tao, m), dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
           data_total = torch.cat((data_total, new_data), dim=0)
       # slicing
       # data_total.shape = [n_seq, cin]
