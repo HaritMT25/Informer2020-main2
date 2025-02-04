@@ -12,85 +12,81 @@ class TokenEmbedding(nn.Module):
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
-        self.kernels = d_model // c_in
-        self.remainder = d_model % c_in
-        
-        self.valid_seq_len = lambda seq_len: seq_len - m*tao
-        
-        self.conv = nn.Conv1d(m+1, self.kernels, kernel_size=3, 
-                             padding=1, padding_mode='circular')
-        
-        if self.remainder > 0:
-            self.conv_remainder = nn.Conv1d(m+1, 1, kernel_size=3, 
-                                           padding=1, padding_mode='circular')
-        
-        for module in self.modules():
-            if isinstance(module, nn.Conv1d):
-                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
+        self.kernels=int(d_model/c_in)
+        # Initialize the embedding layers
+        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-    def create_sliding_windows(self, x):
-        batch_size, seq_len, _ = x.shape
-        window_size = self.m + 1
-        
-        indices = torch.arange(self.m*self.tao, seq_len, device=x.device)
-        window_indices = indices.unsqueeze(1) - torch.arange(0, window_size*self.tao, self.tao, device=x.device).flip(0)
-        
-        x = x.gather(1, window_indices.view(1, -1).expand(batch_size, -1).unsqueeze(-1).expand(-1, -1, self.c_in))
-        return x.view(batch_size, -1, window_size, self.c_in).permute(0, 3, 2, 1).reshape(batch_size*self.c_in, window_size, -1)
+        # Weight initialization for the conv layer
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+
+
+    # vector for each t
+    def construct_faithful_vec(self, t, ts_batch, tao, m):
+      # ts_batch  = [n_seq, cin]
+      faithful_vec = []
+      a = []
+      for c in range(ts_batch.shape[1]):
+        for i in range(m+1):
+          a.append(ts_batch[t-i*tao][c])
+      # cin*(m+1)
+      return torch.tensor(a, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')).reshape(1, -1)
+
+
+    # vecs for all t, per batch
+    def data_extract(self, ts_batch, tao=3, m=5):
+      # ts_batch.shape [n_seq, cin]
+      n_seq, cin = ts_batch.shape
+      data_total = None
+      device_used = 'cuda' if torch.cuda.is_available() else 'cpu'
+      for t in range(m*tao, n_seq):
+        if t == m*tao:
+          data_total  = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+        else:
+          new_data = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+          data_total = torch.cat((data_total, new_data), dim=0)
+      # slicing
+      # data_total.shape = [n_seq, cin]
+      return data_total
 
     def forward(self, x):
+        """Forward pass of the TokenEmbedding layer."""
+        # expects x.type = numpy array
+        batch_size, seq_len, cin = x.shape
+        x_list = []
+
+        # Ensure x is a PyTorch tensor
         if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32, device=self.conv.weight.device)
-        
-        batch_size, seq_len, _ = x.shape
-        x = x.to(self.conv.weight.device)
-        
-        # Create sliding windows: shape [batch*c_in, m+1, valid_seq]
-        x_windows = self.create_sliding_windows(x)
-        
-        # Apply the main convolution: output shape [batch*c_in, kernels, valid_seq]
-        conv_out = self.conv(x_windows)
-        # Reshape to [batch, c_in, kernels, valid_seq]
-        conv_out_reshaped = conv_out.view(batch_size, self.c_in, self.kernels, -1)
-        
-        if self.remainder > 0:
-            # Process the remainder channels using conv_remainder.
-            # Select the first `remainder` channels.
-            x_windows_remainder = x_windows.view(batch_size, self.c_in, self.m + 1, -1)[:, :self.remainder, :, :]
-            # Merge batch and remainder dimensions.
-            x_windows_remainder = x_windows_remainder.reshape(-1, self.m + 1, x_windows_remainder.shape[-1])
-            # Apply the remainder convolution: shape [batch*remainder, 1, valid_seq]
-            rem_out = self.conv_remainder(x_windows_remainder)
-            # Reshape to [batch, remainder, 1, valid_seq]
-            rem_out_reshaped = rem_out.view(batch_size, self.remainder, 1, -1)
-            
-            # For the first `remainder` channels, concatenate along the "kernel" dimension:
-            #   conv_out_reshaped[:, :remainder] has shape [batch, remainder, kernels, valid_seq]
-            #   rem_out_reshaped has shape [batch, remainder, 1, valid_seq]
-            first_embed = torch.cat([conv_out_reshaped[:, :self.remainder], rem_out_reshaped], dim=2)
-            # For the remaining channels, keep the original conv outputs.
-            if self.c_in - self.remainder > 0:
-                second_embed = conv_out_reshaped[:, self.remainder:]  # shape: [batch, c_in - remainder, kernels, valid_seq]
-                # Flatten channel and kernel dimensions separately for both parts.
-                first_embed = first_embed.reshape(batch_size, -1, first_embed.shape[-1])
-                second_embed = second_embed.reshape(batch_size, -1, second_embed.shape[-1])
-                # Concatenate along the feature dimension.
-                out = torch.cat([first_embed, second_embed], dim=1)  # shape: [batch, d_model, valid_seq]
-            else:
-                # Only remainder channels exist.
-                out = first_embed.reshape(batch_size, -1, first_embed.shape[-1])
-        else:
-            # If no remainder, just reshape.
-            out = conv_out_reshaped.reshape(batch_size, -1, conv_out_reshaped.shape[-1])
-        
-        # Permute to get shape [batch, valid_seq, d_model]
-        out = out.permute(0, 2, 1)
-        
-        if self.pad:
-            # Pad along the sequence length dimension at the beginning if needed.
-            out = F.pad(out, (0, 0, self.m*self.tao, 0))
-        
-        return out
+            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
+        for batch_val in range(batch_size):
+            ts_batch = x[batch_val]
+            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
+            x_list.append(extracted_data)
+
+
+        # Convert the list back into a tensor
+        x_embedded = torch.stack(x_list).to(x.device)
+        if self.pad == True:
+          x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
+        x_embedded1=torch.split(x_embedded,self.m+1,dim=2)
+        channel_splitter=[]
+
+
+        for j in range(len(x_embedded1)):
+          channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
+          if j == (len(x_embedded1)-1):
+            leftout_conv = nn.Conv1d(in_channels=self.m+1, out_channels=self.d_model - self.c_in*self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(x.device)
+            channel_splitter.append(leftout_conv(x_embedded1[j].permute((0, 2, 1))).to(x.device))
+
+
+
+           #### concatenates d_model/c_in to avoid channel mixing
+        x_embedded=torch.cat(channel_splitter,dim=1).transpose(1,2)
+        #x_embedded = self.conv(x_embedded.permute((0, 2, 1))).transpose(1,2)
+
+        return x_embedded
 
 
 #############################################
