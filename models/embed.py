@@ -11,153 +11,93 @@ import numpy as np
 
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
-        """
-        Args:
-            c_in: number of input channels
-            d_model: desired output dimension per token
-            tao, m: parameters for constructing the “faithful vector”
-            pad: whether to pad the sequence before convolution
-        """
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
-        
-        # We choose the number of output filters per channel so that 
-        # c_in * kernels is (close to) d_model.
-        self.kernels = int(d_model / c_in)
-        
-        # Create a grouped conv to apply a separate convolution on each channel’s chunk.
-        # Input will be reshaped so that the number of channels is c_in*(m+1)
-        # and the grouped conv will have groups=c_in so that each group is convolved separately.
-        self.group_conv = nn.Conv1d(
-            in_channels=c_in*(m+1),
-            out_channels=c_in*self.kernels,
+        self.kernels = d_model // c_in
+        self.remainder = d_model % c_in
+
+        # Main convolution layer for all splits
+        self.conv = nn.Conv1d(
+            in_channels=m + 1,
+            out_channels=self.kernels,
             kernel_size=3,
             padding=1,
-            padding_mode='circular',
-            groups=c_in
+            padding_mode='circular'
         )
-        
-        # If d_model is not an exact multiple of c_in, we need extra output channels.
-        extra_channels = d_model - c_in*self.kernels
-        if extra_channels > 0:
-            # This conv operates on the last channel’s input (of size m+1) to produce the extra features.
+
+        # Additional convolution for remainder channels if needed
+        if self.remainder != 0:
             self.leftout_conv = nn.Conv1d(
-                in_channels=m+1,
-                out_channels=extra_channels,
+                in_channels=m + 1,
+                out_channels=self.remainder,
                 kernel_size=3,
                 padding=1,
                 padding_mode='circular'
             )
-        else:
-            self.leftout_conv = None
 
-        # Initialize weights for group_conv and leftout_conv (if it exists)
-        nn.init.kaiming_normal_(self.group_conv.weight, mode='fan_in', nonlinearity='leaky_relu')
-        if self.leftout_conv is not None:
-            nn.init.kaiming_normal_(self.leftout_conv.weight, mode='fan_in', nonlinearity='leaky_relu')
+        # Weight initialization
+        for module in self.modules():
+            if isinstance(module, nn.Conv1d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def construct_faithful_vec(self, t, ts_batch):
-        """
-        Construct a faithful vector at time t from the time series batch.
-        The vector is constructed by taking values from t, t-tao, t-2*tao, ..., t-m*tao
-        for each channel.
-        
-        Args:
-            t: current time index (int)
-            ts_batch: tensor of shape [n_seq, c_in]
-        
-        Returns:
-            faithful_vec: tensor of shape [1, (m+1)*c_in]
-        """
+    def construct_faithful_vec(self, t, ts_batch, tao, m):
         a = []
-        # For each channel, append m+1 time values spaced by tao.
         for c in range(ts_batch.shape[1]):
-            for i in range(self.m + 1):
-                a.append(ts_batch[t - i * self.tao][c])
-        # Convert list to tensor of shape [1, (m+1)*c_in]
-        faithful_vec = torch.tensor(a, dtype=torch.float32, device=ts_batch.device).reshape(1, -1)
-        return faithful_vec
+            for i in range(m + 1):
+                a.append(ts_batch[t - i * tao][c])
+        return torch.tensor(a, dtype=torch.float32, device=ts_batch.device).reshape(1, -1)
 
-    def data_extract(self, ts_batch):
-        """
-        Extract faithful vectors for all valid time indices in the batch.
-        
-        Args:
-            ts_batch: tensor of shape [n_seq, c_in]
-        
-        Returns:
-            data_total: tensor of shape [n_seq - m*tao, (m+1)*c_in]
-        """
-        n_seq, _ = ts_batch.shape
-        data_total = []
-        for t in range(self.m * self.tao, n_seq):
-            faithful_vec = self.construct_faithful_vec(t, ts_batch)
-            data_total.append(faithful_vec)
-        # Stack along the time dimension
-        data_total = torch.cat(data_total, dim=0)
-        return data_total
+    def data_extract(self, ts_batch, tao=3, m=5):
+        n_seq, cin = ts_batch.shape
+        device = ts_batch.device
+        data_list = []
+        for t in range(m * tao, n_seq):
+            data = self.construct_faithful_vec(t, ts_batch, tao, m)
+            data_list.append(data)
+        return torch.cat(data_list, dim=0) if data_list else torch.empty(0, cin*(m+1), device=device)
 
     def forward(self, x):
-        """
-        Forward pass.
-        
-        Args:
-            x: input, expected to be a numpy array or a tensor of shape [batch_size, seq_len, c_in]
-        
-        Returns:
-            x_embedded: tensor of shape [batch_size, seq_len', d_model]
-        """
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # Ensure x is a tensor
         if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32, device=device)
+            x = torch.tensor(x, dtype=torch.float32)
         
-        batch_size, seq_len, c_in = x.shape
+        device = x.device
+        x = x.to(device)
+        batch_size, seq_len, cin = x.shape
         x_list = []
-        # For each batch, extract the faithful vectors.
-        for b in range(batch_size):
-            ts_batch = x[b]
-            extracted_data = self.data_extract(ts_batch)
-            x_list.append(extracted_data)
-        # Stack to get shape [batch_size, new_seq_len, (m+1)*c_in]
-        x_embedded = torch.stack(x_list, dim=0)
+
+        for batch_idx in range(batch_size):
+            ts_batch = x[batch_idx]
+            extracted = self.data_extract(ts_batch, self.tao, self.m)
+            x_list.append(extracted)
+
+        x_embedded = torch.stack(x_list).to(device)
         
-        # Optionally pad the sequence on the top (along the time dimension)
         if self.pad:
-            # Padding (left, right, top, bottom) = (0, 0, m*tao, 0)
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
-        
-        # At this point, each token is represented by a vector of length (m+1)*c_in.
-        # Reshape so that we have c_in groups each with (m+1) features.
-        # x_embedded: [batch_size, seq_len_new, c_in*(m+1)]
-        # Permute to get [batch_size, c_in*(m+1), seq_len_new] for Conv1d.
-        x_embedded = x_embedded.to(device)
-        x_embedded = x_embedded.permute(0, 2, 1)
-        
-        # Apply the grouped convolution. Because groups=c_in, this is equivalent
-        # to applying a separate convolution on each channel’s (m+1) features.
-        conv_out = self.group_conv(x_embedded)
-        # conv_out shape: [batch_size, c_in * self.kernels, seq_len_new]
-        
-        # If extra output channels are needed, apply the leftout convolution to the last channel's data.
-        if self.leftout_conv is not None:
-            # First, reshape x_embedded back to extract the last channel’s input.
-            # x_embedded was [batch_size, c_in*(m+1), seq_len_new]
-            # We reshape it to [batch_size, c_in, m+1, seq_len_new]
-            x_split = x_embedded.view(batch_size, self.c_in, self.m+1, -1)
-            # Extract the last channel’s input: shape [batch_size, m+1, seq_len_new]
-            last_channel_input = x_split[:, -1, :, :]
-            # Apply leftout_conv on the last channel’s input.
-            extra_out = self.leftout_conv(last_channel_input)
-            # Concatenate the outputs along the channel dimension.
-            conv_out = torch.cat([conv_out, extra_out], dim=1)
-        
-        # Permute back to shape [batch_size, seq_len_new, d_model]
-        x_embedded = conv_out.transpose(1, 2)
+
+        # Process main splits using vectorization
+        if x_embedded.numel() == 0:
+            return torch.empty((batch_size, 0, self.d_model), device=device)
+
+        _, seq_padded, _ = x_embedded.shape
+        x_main = x_embedded.view(batch_size, seq_padded, self.c_in, self.m + 1)
+        x_main = x_main.permute(0, 2, 3, 1).reshape(-1, self.m + 1, seq_padded)
+        x_main = self.conv(x_main)
+        x_main = x_main.view(batch_size, self.c_in, self.kernels, seq_padded)
+        x_main = x_main.permute(0, 3, 1, 2).reshape(batch_size, seq_padded, -1)
+
+        # Process remainder if needed
+        if self.remainder != 0:
+            last_split = x_embedded[..., - (self.m + 1):].permute(0, 2, 1)
+            x_remainder = self.leftout_conv(last_split).permute(0, 2, 1)
+            x_embedded = torch.cat([x_main, x_remainder], dim=2)
+        else:
+            x_embedded = x_main
+
         return x_embedded
 
 
