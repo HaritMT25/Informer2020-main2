@@ -4,127 +4,97 @@ import torch.nn.functional as F
 import math
 import numpy as np
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
-        """
-        Args:
-            c_in: number of input channels
-            d_model: desired output dimension per token
-            tao, m: parameters for constructing the faithful vector
-            pad: whether to pad the sequence before convolution
-        """
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
-
-        # Determine number of output channels from the primary conv per input channel.
         self.kernels = int(d_model / c_in)
-
-        # Create a convolution layer that is applied to every (m+1)-sized chunk.
+        
+        # Initialize the embedding layers: self.conv and the left-out conv used later.
         self.conv = nn.Conv1d(
             in_channels=m+1,
             out_channels=self.kernels,
             kernel_size=3,
             padding=1,
             padding_mode='circular'
-        )
-        nn.init.kaiming_normal_(self.conv.weight, mode='fan_in', nonlinearity='leaky_relu')
+        ).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        
+        self.leftout_conv = nn.Conv1d(
+            in_channels=m+1,
+            out_channels=self.d_model - self.c_in * self.kernels,
+            kernel_size=3,
+            padding=1,
+            padding_mode='circular'
+        ).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-        # If d_model is not exactly c_in * kernels, then we need an extra conv for the remaining channels.
-        leftout_channels = d_model - c_in * self.kernels
-        if leftout_channels > 0:
-            self.leftout_conv = nn.Conv1d(
-                in_channels=m+1,
-                out_channels=leftout_channels,
-                kernel_size=3,
-                padding=1,
-                padding_mode='circular'
-            )
-            nn.init.kaiming_normal_(self.leftout_conv.weight, mode='fan_in', nonlinearity='leaky_relu')
-        else:
-            self.leftout_conv = None
+        # Weight initialization for the conv layers
+        for module in self.modules():
+            if isinstance(module, nn.Conv1d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def construct_faithful_vec(self, t, ts_batch):
-        """
-        Construct a faithful vector for time t from ts_batch.
-        For each channel, take values from indices t, t-tao, t-2*tao, ..., t-m*tao.
-        """
+    # vector for each t
+    def construct_faithful_vec(self, t, ts_batch, tao, m):
+        # ts_batch  = [n_seq, cin]
+        faithful_vec = []
         a = []
         for c in range(ts_batch.shape[1]):
-            for i in range(self.m + 1):
-                a.append(ts_batch[t - i * self.tao][c])
-        # Return a tensor of shape [1, (m+1)*c_in]
-        return torch.tensor(a, dtype=torch.float32, device=ts_batch.device).reshape(1, -1)
+            for i in range(m+1):
+                a.append(ts_batch[t - i * tao][c])
+        # cin*(m+1)
+        return torch.tensor(a, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')).reshape(1, -1)
 
-    def data_extract(self, ts_batch):
-        """
-        Extract the faithful vectors for all valid time indices from ts_batch.
-        ts_batch is expected to be of shape [n_seq, c_in].
-        """
-        n_seq, _ = ts_batch.shape
-        data_total = []
-        for t in range(self.m * self.tao, n_seq):
-            faithful_vec = self.construct_faithful_vec(t, ts_batch)
-            data_total.append(faithful_vec)
-        # data_total becomes a tensor of shape [n_new_seq, (m+1)*c_in]
-        return torch.cat(data_total, dim=0)
+    # vecs for all t, per batch
+    def data_extract(self, ts_batch, tao=3, m=5):
+        # ts_batch.shape [n_seq, cin]
+        n_seq, cin = ts_batch.shape
+        data_total = None
+        device_used = 'cuda' if torch.cuda.is_available() else 'cpu'
+        for t in range(m * tao, n_seq):
+            if t == m * tao:
+                data_total = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+            else:
+                new_data = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+                data_total = torch.cat((data_total, new_data), dim=0)
+        # slicing
+        # data_total.shape = [n_seq, cin]
+        return data_total
 
     def forward(self, x):
-        """
-        Args:
-            x: a numpy array or tensor of shape [batch_size, seq_len, c_in]
-        
-        Returns:
-            x_embedded: tensor of shape [batch_size, new_seq_len, d_model]
-        """
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # Ensure x is a tensor on the proper device.
-        if isinstance(x, np.ndarray):
-            x = torch.tensor(x, dtype=torch.float32, device=device)
-        else:
-            x = x.to(device)
-
-        batch_size, seq_len, c_in = x.shape
+        """Forward pass of the TokenEmbedding layer."""
+        # expects x.type = numpy array
+        batch_size, seq_len, cin = x.shape
         x_list = []
-        # Process each batch element individually.
-        for b in range(batch_size):
-            ts_batch = x[b]  # Shape: [seq_len, c_in]
-            extracted_data = self.data_extract(ts_batch)  # Shape: [new_seq_len, (m+1)*c_in]
+
+        # Ensure x is a PyTorch tensor
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+
+        for batch_val in range(batch_size):
+            ts_batch = x[batch_val]
+            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
             x_list.append(extracted_data)
-        # Stack into tensor of shape [batch_size, new_seq_len, (m+1)*c_in]
-        x_embedded = torch.stack(x_list, dim=0)
 
-        if self.pad:
-            # Pad along the time dimension (pad top with m*tao zeros).
+        # Convert the list back into a tensor
+        x_embedded = torch.stack(x_list).to(x.device)
+        if self.pad == True:
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
+        x_embedded1 = torch.split(x_embedded, self.m+1, dim=2)
+        channel_splitter = []
 
-        # Split the last dimension into c_in groups of (m+1) features.
-        x_split = torch.split(x_embedded, self.m + 1, dim=2)
-        channel_outputs = []
+        for j in range(len(x_embedded1)):
+            channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
+            if j == (len(x_embedded1) - 1):
+                # Use the pre-initialized self.leftout_conv instead of creating a new one.
+                channel_splitter.append(self.leftout_conv(x_embedded1[j].permute((0, 2, 1))).to(x.device))
 
-        # For each channel group, apply the conv.
-        for j in range(len(x_split)):
-            # Permute to shape [batch_size, m+1, new_seq_len] for Conv1d.
-            conv_input = x_split[j].permute(0, 2, 1)
-            out = self.conv(conv_input)
-            channel_outputs.append(out)
-            # For the last channel, if extra output channels are needed, also apply leftout_conv.
-            if j == len(x_split) - 1 and self.leftout_conv is not None:
-                extra_out = self.leftout_conv(conv_input)
-                channel_outputs.append(extra_out)
+        # Concatenate along the channel dimension to avoid channel mixing.
+        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
 
-        # Concatenate along the channel dimension and then transpose to get [batch_size, new_seq_len, d_model].
-        x_embedded_final = torch.cat(channel_outputs, dim=1).transpose(1, 2)
-        return x_embedded_final
-
+        return x_embedded
 
 
 #############################################
