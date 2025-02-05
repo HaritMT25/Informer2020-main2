@@ -44,7 +44,8 @@ class TokenEmbedding(nn.Module):
         n_valid = n_seq - m * tao  # valid time indices: t = m*tao, m*tao+1, ..., n_seq-1
 
         # Create a vector of valid t indices on device: shape (n_valid,)
-        t_indices = torch.arange(m * tao, n_seq, device=ts_batch.device)  # t values
+        #keep in mind that changing here m*tao to m-1*tao
+        t_indices = torch.arange((m-1) * tao, n_seq, device=ts_batch.device)  # t values
 
         # For each valid t, create the offsets: t, t-tao, ..., t-m*tao.
         # offsets: shape (m+1,)
