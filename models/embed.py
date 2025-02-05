@@ -30,52 +30,54 @@ class TokenEmbedding(nn.Module):
     def data_extract(self, ts_batch, tao=12, m=7):
         """
         Vectorized extraction of faithful vectors.
-        
-        Given a time-series batch tensor `ts_batch` of shape [n_seq, c_in],
-        this method returns a tensor of shape [n_seq - m*tao, c_in*(m+1)].
-        
-        For each valid time index t (from m*tao to n_seq-1), for each channel c,
-        the extracted vector is:
-            [ts_batch[t][c], ts_batch[t-tao][c], ..., ts_batch[t-m*tao][c]]
-        and these values for all channels are concatenated in channel-major order.
         """
+        print("Inside data_extract", flush=True)
+
         # ts_batch is assumed to be already on self.device with shape (n_seq, c_in)
         n_seq, cin = ts_batch.shape
-        n_valid = n_seq - m * tao  # valid time indices: t = m*tao, m*tao+1, ..., n_seq-1
+        n_valid = n_seq - m * tao  # valid time indices
 
-        # Create a vector of valid t indices on device: shape (n_valid,)
-        t_indices = torch.arange(m * tao, n_seq, device=ts_batch.device)  # t values
+        print(f"n_seq: {n_seq}, cin: {cin}, tao: {tao}, m: {m}", flush=True)
+        print(f"n_valid (expected valid time indices): {n_valid}", flush=True)
 
-        # For each valid t, create the offsets: t, t-tao, ..., t-m*tao.
-        # offsets: shape (m+1,)
+        if n_valid <= 0:
+            raise ValueError(f"Invalid n_valid={n_valid}. Check seq_length, m, and tao values.")
+
+        # Create time indices
+        t_indices = torch.arange(m * tao, n_seq, device=ts_batch.device)
+        print(f"t_indices shape: {t_indices.shape} (should be [n_valid])", flush=True)
+
+        # Create offsets and compute time indices
         offsets = torch.arange(0, m + 1, device=ts_batch.device) * tao  
-        # time_indices: shape (n_valid, m+1) where each row is: [t, t-tao, ..., t-m*tao]
         time_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
 
-        # For each channel, gather the corresponding values.
-        # Create a channel index tensor: shape (1, cin, 1) expanded to (n_valid, cin, m+1)
+        print(f"time_indices shape: {time_indices.shape} (should be [n_valid, m+1])", flush=True)
+
+        # Create a channel index tensor
         channel_idx = torch.arange(cin, device=ts_batch.device).view(1, cin, 1).expand(n_valid, cin, m + 1)
-        # Expand time_indices to shape (n_valid, 1, m+1)
         time_idx_expanded = time_indices.unsqueeze(1).expand(n_valid, cin, m + 1)
-        # Using advanced indexing on ts_batch (shape: [n_seq, c_in]) to get a tensor of shape (n_valid, cin, m+1)
+
+        print(f"channel_idx shape: {channel_idx.shape} (should be [n_valid, cin, m+1])", flush=True)
+        print(f"time_idx_expanded shape: {time_idx_expanded.shape} (should be [n_valid, cin, m+1])", flush=True)
+
+        # Extract values using advanced indexing
         extracted = ts_batch[time_idx_expanded, channel_idx]
-        # Flatten the last two dimensions in channel-major order:
-        # For each t, the order is: for c=0: [ts[t][0], ts[t-tao][0], ..., ts[t-m*tao][0],
-        #                                then for c=1: [ts[t][1], ts[t-tao][1], ..., ts[t-m*tao][1], ...]
         faithful_vec = extracted.reshape(n_valid, cin * (m + 1))
+
+        print(f"faithful_vec shape: {faithful_vec.shape} (should be [n_valid, cin*(m+1)])", flush=True)
+
         return faithful_vec
 
     def forward(self, x):
-        """Forward pass of the TokenEmbedding layer.
-        
-        Input x is expected to be a numpy array or a tensor of shape [batch_size, seq_len, c_in].
-        The output is computed such that the numerical results (including the ordering)
-        are identical to the original code.
-        """
+        """Forward pass of the TokenEmbedding layer."""
+        print("Inside forward", flush=True)
+
         batch_size, seq_len, cin = x.shape
+        print(f"Input shape: {x.shape} (batch_size={batch_size}, seq_len={seq_len}, cin={cin})", flush=True)
+
         x_list = []
 
-        # Convert input x to a tensor on the proper device if necessary
+        # Convert input to tensor if needed
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32, device=self.device)
         else:
@@ -84,30 +86,47 @@ class TokenEmbedding(nn.Module):
         # Process each batch entry separately
         for batch_val in range(batch_size):
             ts_batch = x[batch_val]  # shape: (seq_len, c_in)
-            extracted_data = self.data_extract(ts_batch, self.tao, self.m)  # shape: (n_seq - m*tao, c_in*(m+1))
-            x_list.append(extracted_data)
+            print(f"Processing batch {batch_val} with ts_batch shape: {ts_batch.shape}", flush=True)
 
-        # Stack along the batch dimension: shape (batch_size, n_valid, c_in*(m+1))
+            try:
+                extracted_data = self.data_extract(ts_batch, self.tao, self.m)
+                x_list.append(extracted_data)
+            except Exception as e:
+                print(f"Error in data_extract for batch {batch_val}: {e}", flush=True)
+                raise
+
+        # Stack along the batch dimension
         x_embedded = torch.stack(x_list)
+        print(f"x_embedded shape after stacking: {x_embedded.shape}", flush=True)
 
-        # Padding along the time dimension if required
+        # Padding along time dimension if needed
         if self.pad:
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
-        # Split the last dimension into chunks of size (m+1) to separate channels
+            print(f"x_embedded shape after padding: {x_embedded.shape}", flush=True)
+
+        # Split last dimension for convolution
         x_embedded1 = torch.split(x_embedded, self.m + 1, dim=2)
+        print(f"Split x_embedded1 into {len(x_embedded1)} parts", flush=True)
+
         channel_splitter = []
 
-        # Process each channel-split with the corresponding convolution
-        for j in range(len(x_embedded1)):
-            # Permute to shape (batch_size, m+1, time) as expected by nn.Conv1d
-            conv_in = x_embedded1[j].permute(0, 2, 1)
-            channel_splitter.append(self.conv(conv_in))
-            if j == (len(x_embedded1) - 1):
-                channel_splitter.append(self.leftout_conv(conv_in))
+        # Process each split through convolutions
+        for j, part in enumerate(x_embedded1):
+            conv_in = part.permute(0, 2, 1)
+            conv_out = self.conv(conv_in)
+            channel_splitter.append(conv_out)
 
-        # Concatenate along the channel dimension and transpose back to time-major order
+            if j == (len(x_embedded1) - 1):
+                leftout_out = self.leftout_conv(conv_in)
+                channel_splitter.append(leftout_out)
+                print(f"Processed last part with leftout_conv", flush=True)
+
+        # Concatenate and transpose back
         x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
+        print(f"Final x_embedded shape: {x_embedded.shape}", flush=True)
+
         return x_embedded
+
 
 
 
