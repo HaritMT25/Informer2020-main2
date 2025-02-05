@@ -142,12 +142,17 @@ class Exp_Informer(Exp_Basic):
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
 
+        # Initialize channel-wise MSE history
+        channel_mse_history = {ch: [] for ch in range(self.args.c_out)}
+        
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
             
             self.model.train()
             epoch_time = time.time()
+            # To accumulate per-batch channel MSE for the epoch
+            epoch_channel_mse_list = []
             for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(train_loader):
                 iter_count += 1
                 
@@ -156,6 +161,12 @@ class Exp_Informer(Exp_Basic):
                     train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
                 loss = criterion(pred, true)
                 train_loss.append(loss.item())
+                
+                # --- Begin Channel-wise MSE tracking ---
+                # Assuming pred and true have shape [batch, pred_len, channels]
+                batch_channel_mse = ((pred - true) ** 2).mean(dim=(0,1))
+                epoch_channel_mse_list.append(batch_channel_mse.detach().cpu().numpy())
+                # --- End Channel-wise MSE tracking ---
                 
                 if (i+1) % 100==0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
@@ -187,6 +198,12 @@ class Exp_Informer(Exp_Basic):
 
             adjust_learning_rate(model_optim, epoch+1, self.args)
             
+            # --- End of epoch: Average and record channel-wise MSE ---
+            epoch_channel_mse = np.mean(np.stack(epoch_channel_mse_list, axis=0), axis=0)
+            for ch in range(self.args.c_out):
+                channel_mse_history[ch].append(epoch_channel_mse[ch])
+            # --- End recording ---
+            
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
         best_model_path = path + '/' + 'checkpoint.pth'
@@ -195,6 +212,20 @@ class Exp_Informer(Exp_Basic):
             print("Checkpoint loaded successfully!")
         else:
             print("Checkpoint file not found. Using a randomly initialized model.")
+        
+        # --- Plot the channel-wise MSE over epochs ---
+        import matplotlib.pyplot as plt
+        epochs_range = range(1, self.args.train_epochs+1)
+        plt.figure(figsize=(10,6))
+        for ch in range(self.args.c_out):
+            plt.plot(epochs_range, channel_mse_history[ch], label=f'Channel {ch}')
+        plt.xlabel('Epoch')
+        plt.ylabel('MSE')
+        plt.title('Channel-wise MSE over Epochs')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        # --- End plotting ---
 
         return self.model
 
@@ -293,4 +324,3 @@ class Exp_Informer(Exp_Basic):
         batch_y = batch_y[:,-self.args.pred_len:,f_dim:].to(self.device)
 
         return outputs, batch_y
-
