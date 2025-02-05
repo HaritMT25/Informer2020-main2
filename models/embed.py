@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import numpy as np
 
 class TokenEmbedding(nn.Module):
     def __init__(self, c_in, d_model, tao=3, m=5, pad=True):
@@ -11,64 +12,82 @@ class TokenEmbedding(nn.Module):
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
-        self.kernels = d_model // c_in
-
+        self.kernels = int(d_model / c_in)
         # Initialize the embedding layers
-        self.conv = nn.Conv1d(
-            in_channels=m+1,
-            out_channels=self.kernels,
-            kernel_size=3,
-            padding=1,
-            padding_mode='circular'
-        )
-
-        self.leftout_conv = nn.Conv1d(
-            in_channels=m+1,
-            out_channels=d_model - c_in * self.kernels,
-            kernel_size=3,
-            padding=1,
-            padding_mode='circular'
-        )
+        self.conv = nn.Conv1d(in_channels=m+1, out_channels=self.kernels, kernel_size=3, padding=1, padding_mode='circular').to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        
+        # Initialize the leftout_conv outside the loop
+        self.leftout_conv = nn.Conv1d(in_channels=m+1, 
+                                      out_channels=self.d_model - self.c_in*self.kernels, 
+                                      kernel_size=3, 
+                                      padding=1, 
+                                      padding_mode='circular').to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
         # Weight initialization for the conv layers
-        for module in self.modules():
-            if isinstance(module, nn.Conv1d):
-                nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='leaky_relu')
+        for m_module in self.modules():
+            if isinstance(m_module, nn.Conv1d):
+                nn.init.kaiming_normal_(m_module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def construct_faithful_vec(self, t, ts_batch):
-        # Efficiently construct the faithful vector using tensor operations
-        indices = torch.arange(t, t - (self.m + 1) * self.tao, -self.tao, device=ts_batch.device)
-        return ts_batch[indices].reshape(1, -1)
+    # vector for each t
+    def construct_faithful_vec(self, t, ts_batch, tao, m):
+        # ts_batch  = [n_seq, cin]
+        faithful_vec = []
+        a = []
+        for c in range(ts_batch.shape[1]):
+            for i in range(m+1):
+                a.append(ts_batch[t-i*tao][c])
+        # cin*(m+1)
+        return torch.tensor(a, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')).reshape(1, -1)
 
-    def data_extract(self, ts_batch):
-        n_seq, _ = ts_batch.shape
-        data_total = torch.stack(
-            [self.construct_faithful_vec(t, ts_batch) for t in range(self.m * self.tao, n_seq)]
-        )
-        return data_total.squeeze(1)
+    # vecs for all t, per batch
+    def data_extract(self, ts_batch, tao=3, m=5):
+        # ts_batch.shape [n_seq, cin]
+        n_seq, cin = ts_batch.shape
+        data_total = None
+        device_used = 'cuda' if torch.cuda.is_available() else 'cpu'
+        for t in range(m*tao, n_seq):
+            if t == m*tao:
+                data_total  = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+            else:
+                new_data = self.construct_faithful_vec(t, ts_batch, tao, m).clone().detach().to(device_used)
+                data_total = torch.cat((data_total, new_data), dim=0)
+        # slicing
+        # data_total.shape = [n_seq, cin]
+        return data_total
 
     def forward(self, x):
+        """Forward pass of the TokenEmbedding layer."""
+        # expects x.type = numpy array
         batch_size, seq_len, cin = x.shape
-        device = x.device
+        x_list = []
 
-        x_list = [self.data_extract(x[batch_val]) for batch_val in range(batch_size)]
-        x_embedded = torch.stack(x_list).to(device)
+        # Ensure x is a PyTorch tensor
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-        if self.pad:
-            x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
+        for batch_val in range(batch_size):
+            ts_batch = x[batch_val]
+            extracted_data = self.data_extract(ts_batch)  # Extract the faithful vectors
+            x_list.append(extracted_data)
 
-        x_embedded1 = torch.split(x_embedded, self.m + 1, dim=2)
-        channel_splitter = [
-            self.conv(chunk.permute(0, 2, 1)) for chunk in x_embedded1
-        ]
+        # Convert the list back into a tensor
+        x_embedded = torch.stack(x_list).to(x.device)
+        if self.pad == True:
+            x_embedded = F.pad(x_embedded, (0, 0, self.m*self.tao, 0))
+        x_embedded1 = torch.split(x_embedded, self.m+1, dim=2)
+        channel_splitter = []
 
-        if self.d_model % self.c_in != 0:
-            channel_splitter.append(
-                self.leftout_conv(x_embedded1[-1].permute(0, 2, 1))
-            )
+        for j in range(len(x_embedded1)):
+            channel_splitter.append(self.conv(x_embedded1[j].permute((0, 2, 1))))
+            if j == (len(x_embedded1)-1):
+                channel_splitter.append(self.leftout_conv(x_embedded1[j].permute((0, 2, 1))).to(x.device))
 
-        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
+        # Concatenates d_model/c_in to avoid channel mixing
+        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1,2)
+        # x_embedded = self.conv(x_embedded.permute((0, 2, 1))).transpose(1,2)
+
         return x_embedded
+
 
 class PositionalEmbedding(nn.Module):
     def __init__(self, d_model, max_len=5000):
