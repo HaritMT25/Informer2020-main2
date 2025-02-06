@@ -192,7 +192,7 @@ class DataEmbedding(nn.Module):
         dropout: dropout rate.
         """
         super(DataEmbedding, self).__init__()
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=10, tao=1)
+        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=0, tao=1)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         print('Hey_this_is_our_code', flush=True)
         if embed_type != 'timeF':
