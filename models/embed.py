@@ -109,10 +109,9 @@ class TokenEmbedding(nn.Module):
     
             # Concatenate and transpose back
             x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
-            print(self.is_split, flush=True)
+
         else:
             x_embedded = self.total_conv(x_embedded.permute(0,2,1)).transpose(1,2)
-            print(self.is_split, flush=True)
 
         return x_embedded
 
