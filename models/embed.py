@@ -112,7 +112,6 @@ class TokenEmbedding(nn.Module):
 
         else:
             x_embedded = self.total_conv(x_embedded.permute(0,2,1)).transpose(1,2)
-            #print('Hey_this_is_our_code', flush=True)
         return x_embedded
 
 
@@ -195,6 +194,7 @@ class DataEmbedding(nn.Module):
         super(DataEmbedding, self).__init__()
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=10, tao=1)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
+        print('Hey_this_is_our_code', flush=True)
         if embed_type != 'timeF':
             self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
         else:
