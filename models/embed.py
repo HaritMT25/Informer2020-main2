@@ -112,7 +112,7 @@ class TokenEmbedding(nn.Module):
 
         else:
             x_embedded = self.total_conv(x_embedded.permute(0,2,1)).transpose(1,2)
-
+            print('Hey_this_is_our_code', flush=True)
         return x_embedded
 
 
