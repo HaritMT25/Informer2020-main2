@@ -5,13 +5,14 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=12, m=5, pad=True):
+    def __init__(self, c_in, d_model, tao=12, m=5, pad=True, is_split=False):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
         self.d_model = d_model
         self.pad = pad
         self.c_in = c_in
+        self.is_split = is_split
         self.kernels = int(d_model / c_in)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -20,6 +21,9 @@ class TokenEmbedding(nn.Module):
                               kernel_size=3, padding=1, padding_mode='circular').to(self.device)
         self.leftout_conv = nn.Conv1d(in_channels=m+1, 
                                       out_channels=self.d_model - self.c_in * self.kernels, 
+                                      kernel_size=3, padding=1, padding_mode='circular').to(self.device)
+        self.total_conv = nn.Conv1d(in_channels=c_in*(m+1), 
+                                      out_channels=self.d_model, 
                                       kernel_size=3, padding=1, padding_mode='circular').to(self.device)
 
         # Weight initialization for all conv layers
@@ -86,23 +90,29 @@ class TokenEmbedding(nn.Module):
         if self.pad:
             x_embedded = F.pad(x_embedded, (0, 0, self.m * self.tao, 0))
      
-        # Split last dimension for convolution
-        x_embedded1 = torch.split(x_embedded, self.m + 1, dim=2)
-
-        channel_splitter = []
-
-        # Process each split through convolutions
-        for j, part in enumerate(x_embedded1):
-            conv_in = part.permute(0, 2, 1)
-            conv_out = self.conv(conv_in)
-            channel_splitter.append(conv_out)
-
-            if j == (len(x_embedded1) - 1):
-                leftout_out = self.leftout_conv(conv_in)
-                channel_splitter.append(leftout_out)
-
-        # Concatenate and transpose back
-        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
+        
+        if self.is_split == True:
+            # Split last dimension for convolution
+            x_embedded1 = torch.split(x_embedded, self.m + 1, dim=2)
+    
+            channel_splitter = []
+    
+            # Process each split through convolutions
+            for j, part in enumerate(x_embedded1):
+                conv_in = part.permute(0, 2, 1)
+                conv_out = self.conv(conv_in)
+                channel_splitter.append(conv_out)
+    
+                if j == (len(x_embedded1) - 1):
+                    leftout_out = self.leftout_conv(conv_in)
+                    channel_splitter.append(leftout_out)
+    
+            # Concatenate and transpose back
+            x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
+            print(self.is_split, flush=True)
+        else:
+            x_embedded = self.total_conv(x_embedded.permute(0,2,1)).transpose(1,2)
+            print(self.is_split, flush=True)
 
         return x_embedded
 
