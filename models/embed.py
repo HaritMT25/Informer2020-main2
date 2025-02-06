@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=1, m=10, pad=True):
+    def __init__(self, c_in, d_model, tao=1, m=5, pad=True):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
@@ -27,31 +27,31 @@ class TokenEmbedding(nn.Module):
             if isinstance(m_module, nn.Conv1d):
                 nn.init.kaiming_normal_(m_module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def data_extract(self, ts_batch, tao=1, m=10):
+    def data_extract(self, ts_batch):
         """
         Vectorized extraction of faithful vectors.
         """
         # ts_batch is assumed to be already on self.device with shape (n_seq, c_in)
         n_seq, cin = ts_batch.shape
-        n_valid = n_seq - m * tao  # valid time indices
+        n_valid = n_seq - self.m * self.tao  # valid time indices
 
         if n_valid <= 0:
             raise ValueError(f"Invalid n_valid={n_valid}. Check seq_length, m, and tao values.")
 
         # Create time indices
-        t_indices = torch.arange(m * tao, n_seq, device=ts_batch.device)
+        t_indices = torch.arange(self.m * self.tao, n_seq, device=ts_batch.device)
 
         # Create offsets and compute time indices
-        offsets = torch.arange(0, m + 1, device=ts_batch.device) * tao  
+        offsets = torch.arange(0, self.m + 1, device=ts_batch.device) * self.tao  
         time_indices = t_indices.unsqueeze(1) - offsets.unsqueeze(0)
 
         # Create a channel index tensor
-        channel_idx = torch.arange(cin, device=ts_batch.device).view(1, cin, 1).expand(n_valid, cin, m + 1)
-        time_idx_expanded = time_indices.unsqueeze(1).expand(n_valid, cin, m + 1)
+        channel_idx = torch.arange(cin, device=ts_batch.device).view(1, cin, 1).expand(n_valid, cin, self.m + 1)
+        time_idx_expanded = time_indices.unsqueeze(1).expand(n_valid, cin, self.m + 1)
 
         # Extract values using advanced indexing
         extracted = ts_batch[time_idx_expanded, channel_idx]
-        faithful_vec = extracted.reshape(n_valid, cin * (m + 1))
+        faithful_vec = extracted.reshape(n_valid, cin * (self.m + 1))
 
         return faithful_vec
 
@@ -102,7 +102,7 @@ class TokenEmbedding(nn.Module):
                 channel_splitter.append(leftout_out)
 
         # Concatenate and transpose back
-        x_embedded = torch.cat(channel_splitter, dim=0).transpose(1, 2)
+        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
 
         return x_embedded
 
