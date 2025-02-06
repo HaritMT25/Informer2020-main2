@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=1, m=5, pad=True, is_split=False):
+    def __init__(self, c_in, d_model, tao=3, m=5, pad=True, is_split=False):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
