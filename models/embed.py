@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=1, m=0, pad=True):
+    def __init__(self, c_in, d_model, tao=1, m=10, pad=True):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
@@ -27,7 +27,7 @@ class TokenEmbedding(nn.Module):
             if isinstance(m_module, nn.Conv1d):
                 nn.init.kaiming_normal_(m_module.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-    def data_extract(self, ts_batch, tao=1, m=0):
+    def data_extract(self, ts_batch, tao=1, m=10):
         """
         Vectorized extraction of faithful vectors.
         """
@@ -102,7 +102,7 @@ class TokenEmbedding(nn.Module):
                 channel_splitter.append(leftout_out)
 
         # Concatenate and transpose back
-        x_embedded = torch.cat(channel_splitter, dim=1).transpose(1, 2)
+        x_embedded = torch.cat(channel_splitter, dim=10).transpose(1, 2)
 
         return x_embedded
 
@@ -184,7 +184,7 @@ class DataEmbedding(nn.Module):
         dropout: dropout rate.
         """
         super(DataEmbedding, self).__init__()
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=0, tao=1)
+        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=10, tao=1)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         if embed_type != 'timeF':
             self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
