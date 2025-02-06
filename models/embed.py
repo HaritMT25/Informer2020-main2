@@ -73,7 +73,7 @@ class TokenEmbedding(nn.Module):
             ts_batch = x[batch_val]  # shape: (seq_len, c_in)
 
             try:
-                extracted_data = self.data_extract(ts_batch, self.tao, self.m)
+                extracted_data = self.data_extract(ts_batch)
                 x_list.append(extracted_data)
             except Exception as e:
                 print(f"Error in data_extract for batch {batch_val}: {e}", flush=True)
