@@ -102,7 +102,7 @@ class TokenEmbedding(nn.Module):
                 channel_splitter.append(leftout_out)
 
         # Concatenate and transpose back
-        x_embedded = torch.cat(channel_splitter, dim=10).transpose(1, 2)
+        x_embedded = torch.cat(channel_splitter, dim=0).transpose(1, 2)
 
         return x_embedded
 
