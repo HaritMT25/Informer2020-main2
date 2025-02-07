@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=1, m=0, pad=True, is_split=True):
+    def __init__(self, c_in, d_model, tao=24, m=7, pad=True, is_split=True):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
@@ -191,7 +191,7 @@ class DataEmbedding(nn.Module):
         dropout: dropout rate.
         """
         super(DataEmbedding, self).__init__()
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=0, tao=1)
+        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=7, tao=24)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         print('Hey_this_is_our_code', flush=True)
         if embed_type != 'timeF':
@@ -207,6 +207,6 @@ class DataEmbedding(nn.Module):
                 for example, (month, day, weekday, hour, minute).
         """
         # Sum the three embeddings.
-        print(' Data embedding', x.shape)
+        #print(' Data embedding', x.shape)
         x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
         return self.dropout(x)
