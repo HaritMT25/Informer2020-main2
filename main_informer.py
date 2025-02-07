@@ -16,7 +16,7 @@ parser.add_argument('--target', type=str, default='OT', help='target feature in 
 parser.add_argument('--freq', type=str, default='h', help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
 parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
 
-parser.add_argument('--seq_len', type=int, default=336, help='input sequence length of Informer encoder')
+parser.add_argument('--seq_len', type=int, default=96, help='input sequence length of Informer encoder')
 parser.add_argument('--label_len', type=int, default=48, help='start token length of Informer decoder')
 parser.add_argument('--pred_len', type=int, default=24, help='prediction sequence length')
 # Informer decoder input: concat[start token series(label_len), zero padding series(pred_len)]
