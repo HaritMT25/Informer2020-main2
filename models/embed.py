@@ -207,5 +207,6 @@ class DataEmbedding(nn.Module):
                 for example, (month, day, weekday, hour, minute).
         """
         # Sum the three embeddings.
+        print(' Data embedding', x.shape)
         x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
         return self.dropout(x)
