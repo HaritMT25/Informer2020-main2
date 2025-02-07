@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 class TokenEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, tao=24, m=7, pad=True, is_split=True):
+    def __init__(self, c_in, d_model, tao=12, m=7, pad=True, is_split=True):
         super(TokenEmbedding, self).__init__()
         self.tao = tao
         self.m = m
@@ -192,7 +192,7 @@ class DataEmbedding(nn.Module):
         dropout: dropout rate.
         """
         super(DataEmbedding, self).__init__()
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=7, tao=24)
+        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=7, tao=12)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
         print('Hey_this_is_our_code', flush=True)
         if embed_type != 'timeF':
