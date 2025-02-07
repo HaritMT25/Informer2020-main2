@@ -35,6 +35,7 @@ class TokenEmbedding(nn.Module):
         """
         Vectorized extraction of faithful vectors.
         """
+        print("Inside data_extract, ts_batch.shape:", ts_batch.shape, flush=True)
         # ts_batch is assumed to be already on self.device with shape (n_seq, c_in)
         n_seq, cin = ts_batch.shape
         n_valid = n_seq - self.m * self.tao  # valid time indices
