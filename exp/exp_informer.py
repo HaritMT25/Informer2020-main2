@@ -98,7 +98,7 @@ class Exp_Informer(Exp_Basic):
             batch_size=batch_size,
             shuffle=shuffle_flag,
             num_workers=args.num_workers,
-            drop_last=True) #changed drop_last=drop_last to drop_last=True
+            drop_last=drop_last) #changed drop_last=drop_last to drop_last=True
 
         return data_set, data_loader
 
