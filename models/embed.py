@@ -35,7 +35,7 @@ class TokenEmbedding(nn.Module):
         """
         Vectorized extraction of faithful vectors.
         """
-        print("Inside data_extract, ts_batch.shape:", ts_batch.shape, flush=True)
+        #print("Inside data_extract, ts_batch.shape:", ts_batch.shape, flush=True)
         # ts_batch is assumed to be already on self.device with shape (n_seq, c_in)
         n_seq, cin = ts_batch.shape
         n_valid = n_seq - self.m * self.tao  # valid time indices
@@ -193,7 +193,7 @@ class DataEmbedding(nn.Module):
         super(DataEmbedding, self).__init__()
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model, m=0, tao=1)
         self.position_embedding = PositionalEmbedding(d_model=d_model)
-        print('Hey_this_is_our_code', flush=True)
+        #print('Hey_this_is_our_code', flush=True)
         if embed_type != 'timeF':
             self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type, freq=freq)
         else:
